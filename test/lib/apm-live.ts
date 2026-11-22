@@ -167,6 +167,16 @@ export function gitLifecycleConfig(source: GitSource): { version: 1; plugins: Re
   return { version: 1, plugins };
 }
 
+/**
+ * The quiet-update scenario's policy: one skill record whose command makes `node_modules/marker.json` in the copy (a file inside the
+ * folder is what APM sees as drift; an empty folder is not) and appends one line to a run log outside every copy.
+ */
+export function quietLifecycleConfig(source: GitSource, runLog: string): { version: 1; plugins: Record<string, string>[] } {
+  const posix = runLog.split(sep).join('/');
+  const command = `node -e "require('fs').appendFileSync('${posix}','run\\n');require('fs').mkdirSync('node_modules',{recursive:true});require('fs').writeFileSync('node_modules/marker.json','{}')"`;
+  return { version: 1, plugins: [{ source: source.url, ...(source.skill ? { skill: source.skill } : {}), ...(source.path === '.' ? {} : { path: source.path }), 'post-install': command, 'post-update': command }] };
+}
+
 export function deepShape(value: unknown): unknown {
   if (value === null) return 'null';
   if (Array.isArray(value)) return [...new Set(value.map((item) => JSON.stringify(deepShape(item))))].sort().map((text) => JSON.parse(text));

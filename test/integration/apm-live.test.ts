@@ -37,6 +37,7 @@ import {
   packageRoot,
   pickRecording,
   pluginFixtures,
+  quietLifecycleConfig,
   type RecordedStep,
   recordingsRoot,
   removeAccount,
@@ -82,6 +83,12 @@ const commands: string[] = [];
 const recorded = {} as Record<AnyStep, RecordedStep>;
 let recordedProvenance: Record<string, unknown> = {};
 
+/** What `agent-plugin-lifecycle check` printed and exited with (a non-zero exit is a result here, not an error). */
+interface CheckResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
 /** A disposable account with `apm`, the built CLI and the event capture wired in as the user lifecycle commands. */
 interface Session {
   root: string;
@@ -89,7 +96,7 @@ interface Session {
   plugins: string;
   env: NodeJS.ProcessEnv;
   apmRun: (args: string[]) => ReturnType<typeof spawn.sync>;
-  check: () => ReturnType<typeof spawn.sync>;
+  check: () => CheckResult;
   lockText: () => Promise<string>;
   snapshot: (step: AnyStep) => Promise<{ lock: string; fresh: { file: string; payload: string }[] }>;
   inHome: (...parts: string[]) => Promise<string>;
@@ -131,7 +138,9 @@ async function openSession(prefix: string, config: unknown): Promise<Session> {
     return { lock: await lockText().catch(() => ''), fresh };
   }
   const quote = (text: string) => JSON.stringify(text);
-  const hooks = (event: string) => `  ${event}:\n    - run: ${quote(`node "${capture}" "${eventsDir}"`)}\n    - run: ${quote(`node "${cli}" run`)}\n`;
+  // the runner's own output goes to <root>/runner.log: kept where the test can read it
+  const runnerLog = join(root, 'runner.log');
+  const hooks = (event: string) => `  ${event}:\n    - run: ${quote(`node "${capture}" "${eventsDir}"`)}\n    - run: ${quote(`node "${cli}" run >> "${runnerLog}" 2>&1`)}\n`;
   const writeManifest = (dependencies: string) => writeFile(join(home, '.apm', 'apm.yml'), `name: apm-live-user\nversion: 0.0.0\nlifecycle:\n${hooks('post-install')}${hooks('post-update')}${hooks('post-uninstall')}dependencies:\n  apm:\n${dependencies}`);
   await mkdir(join(home, '.apm'), { recursive: true });
   const configDir = join(home, '.config', 'agent-plugin-lifecycle');
@@ -143,7 +152,18 @@ async function openSession(prefix: string, config: unknown): Promise<Session> {
     plugins,
     env,
     apmRun,
-    check: () => run(process.execPath, [cli, 'check'], 'agent-plugin-lifecycle check'),
+    // cross-spawn-cb's sync form throws on a non-zero exit; the error carries the result's status, stdout and stderr
+    check: (): CheckResult => {
+      commands.push('agent-plugin-lifecycle check');
+      try {
+        const { status, stdout, stderr } = spawn.sync(process.execPath, [cli, 'check'], { cwd: home, env, encoding: 'utf8' });
+        return { status, stdout: String(stdout), stderr: String(stderr) };
+      } catch (error) {
+        const failed = error as { status?: number | null; stdout?: string; stderr?: string; signal?: string | null };
+        if (typeof failed.status !== 'number' || failed.signal) throw error;
+        return { status: failed.status, stdout: failed.stdout ?? '', stderr: failed.stderr ?? '' };
+      }
+    },
     lockText,
     snapshot,
     inHome: async (...parts: string[]) => realpath(await readFile(join(home, ...parts), 'utf8')),
@@ -277,16 +297,31 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
       assert.equal(rows.length, 1, 'one locked Git package');
       return { plugin: rows[0], raw: (parseYaml(lock) as { dependencies: Record<string, unknown>[] }).dependencies[0] };
     };
-    // every deployed copy of the skill that APM reports in the lock, as absolute folders under the home, plus the kept copy
-    const skillCopies = (home: string, raw: Record<string, unknown>): string[] => {
+    // The copies the lock reports for the skill (deployed or native), as absolute folders under the home. APM's kept copy is a
+    // destination only when no other copy exists: a copilot-only package is read in place, anything else is APM's cache.
+    const otherSkillCopies = (home: string, raw: Record<string, unknown>): string[] => {
       if (!source.skill) return [];
-      const folders = new Set<string>([kept(home, 'skills', source.skill)]);
+      const folders = new Set<string>();
       for (const file of (raw.deployed_files as string[] | undefined) ?? []) {
         const parts = file.split('/');
         const index = parts.lastIndexOf('skills');
         if (index >= 0 && parts[index + 1] === source.skill) folders.add(join(home, ...parts.slice(0, index + 2)));
       }
+      const native = (raw.native_plugin as { root: string } | undefined)?.root;
+      if (native) folders.add(join(home, ...native.split('/'), 'skills', source.skill));
       return [...folders];
+    };
+    const skillCopies = (home: string, raw: Record<string, unknown>): string[] => {
+      const others = otherSkillCopies(home, raw);
+      return source.skill && others.length === 0 ? [kept(home, 'skills', source.skill)] : others;
+    };
+    const keptIsWholeDestination = (raw: Record<string, unknown>): boolean => !(raw.native_plugin as { root: string } | undefined)?.root;
+    const assertKeptCopy = async (home: string, raw: Record<string, unknown>, file: string, value: string): Promise<void> => {
+      if (keptIsWholeDestination(raw)) assert.equal(await readFile(kept(home, file), 'utf8'), value, 'no native plugin copy exists, so the whole-package command runs in the kept copy');
+      else await assert.rejects(() => stat(kept(home, file)), { code: 'ENOENT' }, `the plugin has its own copy, so ${file} must not be written into APM's kept copy`);
+    };
+    const assertKeptSkillUntouched = async (home: string, raw: Record<string, unknown>, file: string): Promise<void> => {
+      if (source.skill && otherSkillCopies(home, raw).length > 0) await assert.rejects(() => stat(kept(home, 'skills', source.skill ?? '', file)), { code: 'ENOENT' }, `the skill has its own copies, so ${file} must not be written into APM's kept copy`);
     };
 
     before(async function () {
@@ -319,7 +354,8 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
       assert.equal(raw.resolved_commit, first);
       assert.deepEqual([plugin.host, plugin.repo, plugin.path], [source.host, source.repo, source.path]);
       assert.deepEqual(eventNames(fresh), ['post-install.json']);
-      assert.equal(await readFile(kept(home, 'installed.marker'), 'utf8'), 'yes');
+      await assertKeptCopy(home, raw, 'installed.marker', 'yes');
+      await assertKeptSkillUntouched(home, raw, 'setup.done');
       const native = (raw.native_plugin as { root: string } | undefined)?.root;
       if (native) assert.equal(await readFile(join(home, ...native.split('/'), 'installed.marker'), 'utf8'), 'yes', 'the whole-package command also ran in the native plugin copy');
       for (const folder of skillCopies(home, raw)) {
@@ -347,7 +383,8 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
       const names = eventNames(fresh);
       if (source.update === 'tag') assert.ok(names.includes('post-update.json'), `APM did not fire post-update: ${names}`);
       else assert.ok(names.includes('post-install.json'), `APM did not fire post-install: ${names}`);
-      assert.equal(await readFile(kept(home, source.update === 'tag' ? 'updated.marker' : 'installed.marker'), 'utf8'), source.update === 'tag' ? 'yes' : 'yes');
+      await assertKeptCopy(home, raw, source.update === 'tag' ? 'updated.marker' : 'installed.marker', 'yes');
+      await assertKeptSkillUntouched(home, raw, source.update === 'tag' ? 'setup.updated' : 'setup.done');
       for (const folder of skillCopies(home, raw)) assert.equal(await readFile(join(folder, source.update === 'tag' ? 'setup.updated' : 'setup.done'), 'utf8'), home, `the update command ran in ${folder}`);
       const result = check();
       assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
@@ -372,6 +409,185 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
 describeGitScenario('live APM lifecycle from a Git subfolder (anthropics/claude-plugins-official, plugins/commit-commands, no release tags)', GIT_SOURCE, { install: 'git-install', update: 'git-update', uninstall: 'git-uninstall' }, 'apm-live-git');
 describeGitScenario('live APM lifecycle from a whole Git repository (obra/superpowers, pinned at v7.0.0)', GIT_ROOT_SOURCE, { install: 'gitroot-install', update: 'gitroot-update', uninstall: 'gitroot-uninstall' }, 'apm-live-gitroot');
 describeGitScenario('live APM lifecycle from a plain skill repository (vercel-labs/skills, pinned at v1.2.0, skills: [find-skills])', GIT_SKILLS_SOURCE, { install: 'gitskills-install', update: 'gitskills-update', uninstall: 'gitskills-uninstall' }, 'apm-live-gitskills');
+
+const lineCount = async (file: string): Promise<number> => (await readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+const RESTORED = /Restored dependency cache/;
+
+/**
+ * A quiet `apm update` (nothing changed upstream) must not run a command and must not make APM restore its cache: the command's
+ * output may not sit in APM's kept copy. Timing is printed, never asserted.
+ */
+describe('live APM quiet update (vercel-labs/skills, a command that makes node_modules)', function () {
+  this.timeout(600000);
+  const source = GIT_SKILLS_SOURCE;
+  let account: Session;
+  let runLog = '';
+  const keptSkill = (home: string, ...rest: string[]) => join(home, '.apm', 'apm_modules', ...source.repo.split('/'), 'skills', source.skill ?? '', ...rest);
+
+  before(async function () {
+    if (!apm) {
+      if (strict) throw new Error(`apm is not usable but TEST_APM_STRICT=true (${apmProblem}).`);
+      this.skip();
+    }
+    const problem = unreachablePins(source);
+    if (problem) {
+      if (strict) throw new Error(`${problem} (TEST_APM_STRICT=true)`);
+      console.log(`      skipping the quiet-update scenario: ${problem}`);
+      this.skip();
+    }
+    const probe = await makeAccount('apm-live-quiet');
+    removeAccount(probe.root);
+    runLog = join(probe.root, 'run.log');
+    account = await openSession('apm-live-quiet', quietLifecycleConfig(source, join(probe.root, 'run.log')));
+    runLog = join(account.root, 'run.log');
+    await writeFile(join(account.home, '.config', 'agent-plugin-lifecycle', 'config.json'), JSON.stringify(quietLifecycleConfig(source, runLog)));
+    await account.writeManifest(`    - git: ${source.url}.git\n      ref: ${source.pins.first}\n      skills:\n${(source.select ?? []).map((name) => `        - ${name}\n`).join('')}`);
+  });
+
+  after(async () => {
+    if (account) removeAccount(account.root);
+  });
+
+  it("install, then a real update: the command ran in the skill copies APM deployed and left APM's kept copy untouched", async () => {
+    const { apmRun, home, check } = account;
+    apmRun(['install', '-g', '--target', source.target]);
+    apmRun(['update', '-g', '--yes', '--target', source.target]);
+    assert.ok((await lineCount(runLog)) > 0, 'the command ran');
+    const copy = join(home, '.agents', 'skills', source.skill ?? '');
+    assert.equal(await readFile(join(copy, 'node_modules', 'marker.json'), 'utf8'), '{}', 'the deployed copy holds the command output');
+    await assert.rejects(() => stat(keptSkill(home, 'node_modules')), { code: 'ENOENT' }, "APM's kept copy must hold no node_modules");
+    const result = check();
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  });
+
+  it('a quiet `apm update` runs no command, makes APM restore nothing, and leaves the kept copy clean', async () => {
+    const { env, home } = account;
+    const before = await lineCount(runLog);
+    const timed = (extra: NodeJS.ProcessEnv) => {
+      const start = Date.now();
+      const result = spawn.sync('apm', ['update', '-g', '--yes', '--target', source.target], { cwd: home, env: { ...env, ...extra }, encoding: 'utf8' });
+      return { result, ms: Date.now() - start, output: `${result.stdout}${result.stderr}` };
+    };
+    const quiet = timed({});
+    assert.equal(quiet.result.status, 0, quiet.output);
+    // the baseline: the same update with APM's lifecycle commands switched off (run twice, so a cache restore cannot be what is timed)
+    timed({ APM_NO_SCRIPTS: '1' });
+    const baseline = timed({ APM_NO_SCRIPTS: '1' });
+    console.log(`      quiet update with the lifecycle commands: ${quiet.ms} ms; with APM_NO_SCRIPTS=1: ${baseline.ms} ms (recorded, not asserted)`);
+    assert.equal(await lineCount(runLog), before, `a quiet update ran the command ${(await lineCount(runLog)) - before} more time(s)`);
+    assert.doesNotMatch(quiet.output, RESTORED);
+    await assert.rejects(() => stat(keptSkill(home, 'node_modules')), { code: 'ENOENT' });
+  });
+
+  it('uninstall: APM keeps the skill folder holding the command output and says so; the runner prints `left <path>`; check says nothing installed', async () => {
+    const { env, home, root, check } = account;
+    const copy = join(home, '.agents', 'skills', source.skill ?? '');
+    const result = spawn.sync('apm', ['uninstall', '-g', source.repo], { cwd: home, env, encoding: 'utf8' });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.equal(result.status, 0, output);
+    console.log(`      uninstall output:\n${output.replace(/^/gm, '        ')}`);
+    assert.match(output, /Kept skill director/i, "APM's own message about the folder it kept");
+    assert.ok((await stat(join(copy, 'node_modules'))).isDirectory(), 'the folder with the command output stays');
+    const runner = await readFile(join(root, 'runner.log'), 'utf8');
+    assert.ok(runner.includes(`left ${copy}`) || runner.includes(`left ${await realpath(copy)}`), `the runner prints left <path> for the kept copy:\n${runner}`);
+    const none = check();
+    assert.equal(none.status, 0, `${none.stdout}${none.stderr}`);
+    assert.match(`${none.stdout}${none.stderr}`, /nothing installed/);
+  });
+});
+
+/**
+ * A skill (or whole plugin) whose only copy is APM's kept copy (the copilot target reads it in place) still has its command run
+ * there. Measured with real APM: that output makes the next quiet `apm update` restore the cache and fire the events.
+ */
+describe('live APM copilot-only Git plugin (the kept copy is the only copy)', function () {
+  this.timeout(600000);
+  const source = GIT_SOURCE;
+  let account: Session;
+  let runLog = '';
+  const kept = (home: string, ...rest: string[]) => join(home, '.apm', 'apm_modules', ...source.repo.split('/'), ...source.path.split('/'), ...rest);
+
+  before(async function () {
+    if (!apm) {
+      if (strict) throw new Error(`apm is not usable but TEST_APM_STRICT=true (${apmProblem}).`);
+      this.skip();
+    }
+    const problem = unreachablePins(source);
+    if (problem) {
+      if (strict) throw new Error(`${problem} (TEST_APM_STRICT=true)`);
+      console.log(`      skipping the copilot-only scenario: ${problem}`);
+      this.skip();
+    }
+    account = await openSession('apm-live-copilot', { version: 1, plugins: [] });
+    runLog = join(account.root, 'run.log');
+    await writeFile(join(account.home, '.config', 'agent-plugin-lifecycle', 'config.json'), JSON.stringify(quietLifecycleConfig(source, runLog)));
+    await account.writeManifest(`    - git: ${source.url}.git\n      path: ${source.path}\n      ref: ${source.pins.first}\n`);
+  });
+
+  after(async () => {
+    if (account) removeAccount(account.root);
+  });
+
+  it('the command runs in the kept copy (the only copy); APM restores its cache on the next quiet update; the receipt then skips the command', async () => {
+    const { apmRun, env, home, snapshot } = account;
+    apmRun(['install', '-g', '--target', source.target]);
+    await snapshot('git-install');
+    assert.equal(await readFile(kept(home, 'node_modules', 'marker.json'), 'utf8'), '{}', 'the command ran in the kept copy');
+    const afterInstall = await lineCount(runLog);
+    const update = () => {
+      const result = spawn.sync('apm', ['update', '-g', '--yes', '--target', source.target], { cwd: home, env, encoding: 'utf8' });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      return `${result.stdout}${result.stderr}`;
+    };
+    const first = update();
+    console.log(`      copilot-only, first quiet update: ${RESTORED.test(first) ? 'APM restored its dependency cache' : 'APM did not restore its cache'}`);
+    assert.match(first, RESTORED, 'output in the only copy is drift to APM (an APM limitation the README documents)');
+    // with the receipt skipping a copy that is already current, the restore does not trigger another command round
+    assert.equal(await lineCount(runLog), afterInstall, 'the receipt skip: the restore fired the events but the command did not run again');
+    assert.doesNotMatch(update(), RESTORED, 'the second quiet update is settled');
+  });
+});
+
+describe('live check against real APM state (vercel-labs/skills)', function () {
+  this.timeout(600000);
+  const source = GIT_SKILLS_SOURCE;
+  let account: Session;
+
+  before(async function () {
+    if (!apm) {
+      if (strict) throw new Error(`apm is not usable but TEST_APM_STRICT=true (${apmProblem}).`);
+      this.skip();
+    }
+    const problem = unreachablePins(source);
+    if (problem) {
+      if (strict) throw new Error(`${problem} (TEST_APM_STRICT=true)`);
+      console.log(`      skipping the check scenario: ${problem}`);
+      this.skip();
+    }
+    account = await openSession('apm-live-check', { version: 1, plugins: [] });
+    await writeFile(join(account.home, '.config', 'agent-plugin-lifecycle', 'config.json'), JSON.stringify(quietLifecycleConfig(source, join(account.root, 'run.log'))));
+    await account.writeManifest(`    - git: ${source.url}.git\n      ref: ${source.pins.first}\n      skills:\n${(source.select ?? []).map((name) => `        - ${name}\n`).join('')}`);
+  });
+
+  after(async () => {
+    if (account) removeAccount(account.root);
+  });
+
+  it('a copy removed by hand: check prints broken and exits 1; after `apm uninstall` of everything it prints nothing installed and exits 0', async () => {
+    const { apmRun, home, check } = account;
+    apmRun(['install', '-g', '--target', source.target]);
+    const ok = check();
+    assert.equal(ok.status, 0, `${ok.stdout}${ok.stderr}`);
+    safeRmSync(join(home, '.agents', 'skills', source.skill ?? ''));
+    const broken = check();
+    assert.equal(broken.status, 1, `${broken.stdout}${broken.stderr}`);
+    assert.match(String(broken.stdout) + String(broken.stderr), /broken/);
+    apmRun(['uninstall', '-g', source.repo]);
+    const none = check();
+    assert.equal(none.status, 0, `${none.stdout}${none.stderr}`);
+    assert.match(String(none.stdout) + String(none.stderr), /nothing installed/);
+  });
+});
 
 const provenanceOf = (source: GitSource) => ({ url: source.url, path: source.path, skill: source.skill, select: source.select, update: source.update, target: source.target, first: source.pins.first, second: source.pins.second });
 

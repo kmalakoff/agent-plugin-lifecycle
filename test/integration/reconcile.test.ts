@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runLifecycle } from 'agent-plugin-lifecycle';
 import { safeRmSync } from 'fs-remove-compat';
@@ -65,14 +65,15 @@ describe('APM lifecycle dispatch', () => {
       await writeFile(join(apmHome, 'apm.lock.yaml'), stringify({ dependencies: [row('.', ['.agents/skills/hello/SKILL.md']), row('plugins/beta')] }));
       const options = { home, apmHome, configPath, environment: isolatedEnvironment(home), output: () => undefined };
       assert.equal(await runLifecycle('run', { ...options, event: event('post-install') }), 0);
-      assert.equal(await readFile(join(kept, 'installed'), 'utf8'), 'yes');
-      assert.equal(await readFile(join(skill, 'installed'), 'utf8'), home);
+      // the whole-plugin record has a native copy, so APM's kept copy is left alone; so is the kept skill beside its deployed copies
+      assert.equal(await readFile(join(nativeRoot, 'installed'), 'utf8'), 'yes');
+      await assert.rejects(() => stat(join(kept, 'installed')), { code: 'ENOENT' });
+      await assert.rejects(() => stat(join(skill, 'installed')), { code: 'ENOENT' });
       assert.equal(await readFile(join(skillCopy, 'installed'), 'utf8'), home);
       assert.equal(await readFile(join(nativeSkill, 'installed'), 'utf8'), home);
       assert.equal(await readFile(join(beta, 'installed'), 'utf8'), 'yes');
       assert.equal(await runLifecycle('run', { ...options, event: event('post-update') }), 0);
-      assert.equal(await readFile(join(kept, 'updated'), 'utf8'), 'yes');
-      assert.equal(await readFile(join(skill, 'installed'), 'utf8'), home);
+      assert.equal(await readFile(join(nativeRoot, 'updated'), 'utf8'), 'yes');
       assert.equal(await runLifecycle('check', options), 0);
 
       await writeFile(join(apmHome, 'apm.lock.yaml'), stringify({ dependencies: [row('.', ['.agents/skills/hello/SKILL.md'])] }));
@@ -168,6 +169,13 @@ describe('APM lifecycle dispatch', () => {
       assert.equal(await runLifecycle('run', { ...options, event: event('post-install') }), 0);
       assert.equal(await runLifecycle('check', options), 0);
       environment.FAIL_INSTALL = 'yes';
+      // nothing changed: the receipt is current and the command does not run again
+      assert.equal(await runLifecycle('run', { ...options, event: event('post-update') }), 0);
+      assert.equal(await runLifecycle('check', options), 0);
+      // a new commit reruns it, and the failure leaves no success receipt behind
+      const changed = parseYaml(lock) as { dependencies: { resolved_commit: string }[] };
+      changed.dependencies[0].resolved_commit = 'f'.repeat(40);
+      await writeFile(join(apmHome, 'apm.lock.yaml'), stringify(changed));
       assert.equal(await runLifecycle('run', { ...options, event: event('post-update') }), 1);
       assert.equal(await runLifecycle('check', options), 1);
     } finally {
@@ -220,6 +228,260 @@ describe('APM lifecycle dispatch', () => {
       assert.equal(await readFile(join(kept, 'quoted name.txt'), 'utf8'), 'say "hi" it is');
     } finally {
       safeRmSync(home);
+    }
+  });
+});
+
+// Receipts (digest + revision), the kept-copy rule and `check` statuses, against a hand-written lock: the shapes needed here
+// (`native_plugin`, `deployed_files`, a moving commit) are not in any recording.
+describe('receipts, copies and check statuses', () => {
+  const source = 'https://example.com/org/repo.git';
+  const log = "node -e \"require('fs').appendFileSync('runs.log','x')\"";
+  const runs = async (dir: string): Promise<number> => {
+    try {
+      return (await readFile(join(dir, 'runs.log'), 'utf8')).length;
+    } catch {
+      return 0;
+    }
+  };
+  interface Setup {
+    home: string;
+    apmHome: string;
+    configPath: string;
+    configDir: string;
+    lines: string[];
+    options: { home: string; apmHome: string; configPath: string; environment: NodeJS.ProcessEnv; output: (line: string) => void };
+    lock(commit?: string, native?: boolean, files?: string[]): Promise<void>;
+    config(plugin: Record<string, unknown>): Promise<void>;
+    kept: string;
+    native: string;
+  }
+  async function setup(): Promise<Setup> {
+    const home = await fixtureHome();
+    const apmHome = join(home, '.apm');
+    const configDir = join(home, '.config', 'agent-plugin-lifecycle');
+    const configPath = join(configDir, 'config.json');
+    await mkdir(configDir, { recursive: true });
+    const lines: string[] = [];
+    return {
+      home,
+      apmHome,
+      configPath,
+      configDir,
+      lines,
+      options: { home, apmHome, configPath, environment: isolatedEnvironment(home), output: (line: string) => void lines.push(line) },
+      kept: join(apmHome, 'apm_modules', 'org', 'repo'),
+      native: join(home, '.agents', 'plugins', 'repo'),
+      async lock(commit = 'a', native = true, files: string[] = []) {
+        const row = { host: 'example.com', repo_url: 'org/repo', virtual_path: '.', resolved_commit: commit.repeat(40), content_hash: `sha256:${'b'.repeat(64)}`, native_plugin: native ? { root: '.agents/plugins/repo' } : null, deployed_files: files };
+        await mkdir(apmHome, { recursive: true });
+        await writeFile(join(apmHome, 'apm.lock.yaml'), stringify({ dependencies: [row] }));
+      },
+      async config(plugin) {
+        await writeFile(configPath, JSON.stringify({ version: 1, plugins: [{ source, ...plugin }] }));
+      },
+    };
+  }
+
+  it("runs in APM's kept copy only when no other copy exists", async () => {
+    const t = await setup();
+    try {
+      await mkdir(t.kept, { recursive: true });
+      await mkdir(t.native, { recursive: true });
+      await t.config({ 'post-install': log });
+      await t.lock('a', true);
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 0);
+      assert.equal(await runs(t.native), 1);
+      assert.equal(await runs(t.kept), 0, "the kept copy is APM's cache when a native copy exists");
+
+      // the skill record: kept skill + deployed copies -> deployed copies only; kept skill alone -> kept skill
+      const keptSkill = join(t.kept, 'skills', 'hello');
+      const claudeSkill = join(t.home, '.claude', 'skills', 'hello');
+      await mkdir(keptSkill, { recursive: true });
+      await mkdir(claudeSkill, { recursive: true });
+      await t.config({ skill: 'hello', 'post-install': log });
+      await t.lock('a', false, ['.claude/skills/hello/SKILL.md']);
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 0);
+      assert.equal(await runs(claudeSkill), 1);
+      assert.equal(await runs(keptSkill), 0);
+
+      await t.lock('a', false, []);
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 0);
+      assert.equal(await runs(keptSkill), 1, 'the kept skill is the only copy');
+
+      const alone = await setup();
+      try {
+        await mkdir(alone.kept, { recursive: true });
+        await alone.config({ 'post-install': log });
+        await alone.lock('a', false);
+        assert.equal(await runLifecycle('run', { ...alone.options, event: event('post-install') }), 0);
+        assert.equal(await runs(alone.kept), 1, 'the kept plugin copy is the only copy');
+      } finally {
+        safeRmSync(alone.home);
+      }
+    } finally {
+      safeRmSync(t.home);
+    }
+  });
+
+  it('skips a copy whose receipt matches the command and revision, and reruns when either changes or the copy was removed', async () => {
+    const t = await setup();
+    try {
+      const other = join(t.home, '.claude', 'skills', 'hello');
+      const agents = join(t.home, '.agents', 'skills', 'hello');
+      for (const dir of [other, agents]) await mkdir(dir, { recursive: true });
+      const files = ['.claude/skills/hello/SKILL.md', '.agents/skills/hello/SKILL.md'];
+      await t.config({ skill: 'hello', 'post-install': log });
+      await t.lock('a', false, files);
+      const fire = (name: 'post-install' | 'post-update' = 'post-install') => runLifecycle('run', { ...t.options, event: event(name) });
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(other), 1);
+      t.lines.length = 0;
+      assert.equal(await fire('post-update'), 0); // the second event of one APM run: nothing changed
+      assert.equal(await runs(other), 1);
+      assert.equal(await runs(agents), 1);
+      assert.deepEqual(
+        t.lines.map((line) => line.split(' ')[0]),
+        ['current', 'current']
+      );
+
+      await t.lock('c', false, files); // a new commit
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(other), 2);
+
+      await t.config({ skill: 'hello', 'post-install': `${log} && echo` }); // a changed command
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(other), 3);
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(other), 3);
+
+      safeRmSync(other); // a removed copy loses its receipt; APM recreates it empty and the next run fills it
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(agents), 3);
+      await mkdir(other, { recursive: true });
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(other), 1);
+      assert.equal(await runs(agents), 3);
+    } finally {
+      safeRmSync(t.home);
+    }
+  });
+
+  it('reads a version 1 state, reruns each copy once and saves version 2 receipts with the revision', async () => {
+    const t = await setup();
+    try {
+      await mkdir(t.native, { recursive: true });
+      await t.config({ 'post-install': log });
+      await t.lock();
+      const fire = () => runLifecycle('run', { ...t.options, event: event('post-install') });
+      assert.equal(await fire(), 0);
+      const statePath = join(t.configDir, 'state.json');
+      const v2 = JSON.parse(await readFile(statePath, 'utf8'));
+      assert.equal(v2.version, 2);
+      const [[key, receipt]] = Object.entries(v2.receipts) as [string, { digest: string; revision: string }][];
+      assert.equal(receipt.revision, `${'a'.repeat(40)}:sha256:${'b'.repeat(64)}`);
+      await writeFile(statePath, JSON.stringify({ version: 1, receipts: { [key]: receipt.digest } }));
+      assert.equal(await runLifecycle('check', t.options), 1, 'a version 1 receipt has an unknown revision');
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(t.native), 2);
+      assert.equal(JSON.parse(await readFile(statePath, 'utf8')).version, 2);
+      assert.equal(await fire(), 0);
+      assert.equal(await runs(t.native), 2);
+    } finally {
+      safeRmSync(t.home);
+    }
+  });
+
+  it('check says ok, missing, stale or broken per copy, and nothing installed without lock rows', async () => {
+    const t = await setup();
+    try {
+      await mkdir(t.native, { recursive: true });
+      await t.config({ 'post-install': log });
+      assert.equal(await runLifecycle('check', t.options), 0);
+      assert.deepEqual(t.lines, ['nothing installed']);
+
+      await t.lock();
+      t.lines.length = 0;
+      assert.equal(await runLifecycle('check', t.options), 1);
+      assert.deepEqual(t.lines, [`missing ${JSON.stringify([source, '.', null])} ${await realpath(t.native)}`]);
+
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 0);
+      const status = async (): Promise<[number, string]> => {
+        t.lines.length = 0;
+        const code = await runLifecycle('check', t.options);
+        return [code, t.lines[0].split(' ')[0]];
+      };
+      assert.deepEqual(await status(), [0, 'ok']);
+
+      await t.lock('c');
+      assert.deepEqual(await status(), [1, 'stale']);
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-update') }), 0);
+      assert.deepEqual(await status(), [0, 'ok']);
+
+      await t.config({ 'post-install': `${log} && echo` });
+      assert.deepEqual(await status(), [1, 'stale']);
+      await t.config({ 'post-install': log });
+      assert.deepEqual(await status(), [0, 'ok']);
+
+      safeRmSync(t.native);
+      assert.deepEqual(await status(), [1, 'broken']);
+
+      safeRmSync(join(t.apmHome, 'apm.lock.yaml'));
+      t.lines.length = 0;
+      assert.equal(await runLifecycle('check', t.options), 0);
+      assert.deepEqual(t.lines, ['nothing installed']);
+
+      await writeFile(join(t.apmHome, 'apm.lock.yaml'), stringify({ dependencies: [] }));
+      t.lines.length = 0;
+      assert.equal(await runLifecycle('check', t.options), 0);
+      assert.deepEqual(t.lines, ['nothing installed']);
+    } finally {
+      safeRmSync(t.home);
+    }
+  });
+
+  it('prints left for each copy that still exists before the post-uninstall command, and deletes nothing', async () => {
+    const t = await setup();
+    try {
+      const other = join(t.home, '.claude', 'skills', 'hello');
+      const agents = join(t.home, '.agents', 'skills', 'hello');
+      for (const dir of [other, agents]) await mkdir(dir, { recursive: true });
+      await t.config({ skill: 'hello', 'post-install': log, 'post-uninstall': "node -e \"require('fs').writeFileSync('cleanup.done','ok')\"" });
+      await t.lock('a', false, ['.claude/skills/hello/SKILL.md', '.agents/skills/hello/SKILL.md']);
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 0);
+      await writeFile(join(other, 'mine.txt'), 'user file');
+      safeRmSync(agents); // APM removed this one; the other is kept because it holds a file APM did not write
+      safeRmSync(join(t.apmHome, 'apm.lock.yaml'));
+      t.lines.length = 0;
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-uninstall', [{ name: 'org/repo', reference: null }]) }), 0);
+      assert.deepEqual(t.lines, [`left ${await realpath(other)}`, `cleaned ${JSON.stringify([source, '.', 'hello'])}`]);
+      assert.equal(await readFile(join(other, 'mine.txt'), 'utf8'), 'user file');
+      assert.equal(await runs(other), 1);
+      assert.equal(await readFile(join(t.home, 'cleanup.done'), 'utf8'), 'ok');
+    } finally {
+      safeRmSync(t.home);
+    }
+  });
+
+  it('never uses the kept copy when the lock names another copy that is missing on disk', async () => {
+    const t = await setup();
+    try {
+      await mkdir(join(t.kept, 'skills', 'hello'), { recursive: true });
+      await mkdir(t.kept, { recursive: true });
+      await t.config({ skill: 'hello', 'post-install': log });
+      await t.lock('a', false, ['.claude/skills/hello/SKILL.md']); // listed, not on disk
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 1);
+      assert.equal(await runs(join(t.kept, 'skills', 'hello')), 0);
+      assert.equal(await runLifecycle('check', t.options), 1);
+
+      await t.config({ 'post-install': log });
+      await t.lock('a', true); // native root listed, not on disk
+      t.lines.length = 0;
+      assert.equal(await runLifecycle('run', { ...t.options, event: event('post-install') }), 1);
+      assert.equal(await runs(t.kept), 0);
+      assert.equal(await runLifecycle('check', t.options), 1);
+    } finally {
+      safeRmSync(t.home);
     }
   });
 });

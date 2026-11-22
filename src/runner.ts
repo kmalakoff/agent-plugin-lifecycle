@@ -15,9 +15,14 @@ export interface LifecycleEvent {
   scope: 'user';
   packages: { name: string; reference: string | null }[];
 }
+// `revision` is the locked revision the command last ran against; '' is a version 1 receipt, whose revision was never recorded.
+interface Receipt {
+  digest: string;
+  revision: string;
+}
 interface State {
-  version: 1;
-  receipts: Record<string, string>;
+  version: 2;
+  receipts: Record<string, Receipt>;
 }
 export interface RunOptions {
   home?: string;
@@ -42,49 +47,67 @@ async function existingWithin(root: string, path: string, label: string): Promis
 function pluginRoot(plugin: LockedPlugin, apmHome: string): string {
   return join(apmHome, 'apm_modules', plugin.repo, plugin.path);
 }
-async function destinations(plugin: LockedPlugin, policy: PluginPolicy, home: string, apmHome: string): Promise<string[]> {
-  const output = new Set<string>();
-  const root = pluginRoot(plugin, apmHome);
-  if (!policy.skill) {
-    output.add(await existingWithin(join(apmHome, 'apm_modules'), join(plugin.repo, plugin.path), 'kept plugin'));
-    if (plugin.nativePluginRoot) {
-      const nativeBase = join(home, '.agents', 'plugins');
-      if (plugin.nativePluginRoot.startsWith('.agents/plugins/')) output.add(await existingWithin(nativeBase, plugin.nativePluginRoot.slice('.agents/plugins/'.length), 'native plugin'));
-    }
-  } else {
-    try {
-      output.add(await existingWithin(root, `skills/${policy.skill}`, `kept skill ${policy.skill}`));
-    } catch (error) {
-      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
-    }
-    if (plugin.nativePluginRoot?.startsWith('.agents/plugins/')) {
-      const nativeRoot = plugin.nativePluginRoot.slice('.agents/plugins/'.length);
-      try {
-        output.add(await existingWithin(join(home, '.agents', 'plugins'), `${nativeRoot}/skills/${policy.skill}`, `native skill ${policy.skill}`));
-      } catch (error) {
-        if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
-    }
-    for (const file of plugin.deployedFiles) {
-      const parts = file.split('/');
-      const index = parts.lastIndexOf('skills');
-      if (index < 0 || parts[index + 1] !== policy.skill) continue;
-      const deployment = parts.slice(0, index + 2).join('/');
-      const prefix = ['.agents/skills/', '.hermes/skills/', '.claude/skills/'].find((candidate) => deployment.startsWith(candidate));
-      if (prefix) output.add(await existingWithin(home, deployment, `skill ${policy.skill}`));
-    }
-    if (output.size === 0) throw new Error(`no deployed copy found for skill ${policy.skill}`);
+function missing(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
+}
+async function existingOrNone(root: string, path: string, label: string): Promise<string | undefined> {
+  try {
+    return await existingWithin(root, path, label);
+  } catch (error) {
+    if (missing(error)) return undefined;
+    throw error;
   }
-  return [...output];
+}
+const SKILL_ROOTS = ['.agents/skills/', '.hermes/skills/', '.claude/skills/'];
+function deployedSkillFolders(plugin: LockedPlugin, skill: string): string[] {
+  const folders = new Set<string>();
+  for (const file of plugin.deployedFiles) {
+    const parts = file.split('/');
+    const index = parts.lastIndexOf('skills');
+    if (index < 0 || parts[index + 1] !== skill) continue;
+    const deployment = parts.slice(0, index + 2).join('/');
+    if (SKILL_ROOTS.some((candidate) => deployment.startsWith(candidate))) folders.add(deployment);
+  }
+  return [...folders];
+}
+// APM's kept copy (`apm_modules/...`) is a destination only when the lock names no other copy: a target such as copilot reads it in place.
+// When the lock names a native plugin root or deployed skill copies, the kept copy is APM's cache and is never used, even if the listed copies are missing on disk (they are skipped, and check reports them).
+async function destinations(plugin: LockedPlugin, policy: PluginPolicy, home: string, apmHome: string): Promise<string[]> {
+  const found = new Set<string>();
+  const add = (path: string | undefined) => {
+    if (path) found.add(path);
+  };
+  const nativeRoot = plugin.nativePluginRoot?.startsWith('.agents/plugins/') ? plugin.nativePluginRoot.slice('.agents/plugins/'.length) : undefined;
+  if (!policy.skill) {
+    if (!nativeRoot) return [await existingWithin(join(apmHome, 'apm_modules'), join(plugin.repo, plugin.path), 'kept plugin')];
+    add(await existingOrNone(join(home, '.agents', 'plugins'), nativeRoot, 'native plugin'));
+    if (!found.size) throw new Error(`no native plugin copy found for ${plugin.repo}`);
+    return [...found];
+  }
+  const deployed = deployedSkillFolders(plugin, policy.skill);
+  if (!nativeRoot && !deployed.length) {
+    const kept = await existingOrNone(pluginRoot(plugin, apmHome), `skills/${policy.skill}`, `kept skill ${policy.skill}`);
+    if (!kept) throw new Error(`no deployed copy found for skill ${policy.skill}`);
+    return [kept];
+  }
+  if (nativeRoot) add(await existingOrNone(join(home, '.agents', 'plugins'), `${nativeRoot}/skills/${policy.skill}`, `native skill ${policy.skill}`));
+  for (const deployment of deployed) add(await existingOrNone(home, deployment, `skill ${policy.skill}`));
+  if (!found.size) throw new Error(`no deployed copy found for skill ${policy.skill}`);
+  return [...found];
 }
 async function readState(path: string): Promise<State> {
-  if (!existsSync(path)) return { version: 1, receipts: {} };
+  if (!existsSync(path)) return { version: 2, receipts: {} };
   const value: unknown = JSON.parse(await readFile(path, 'utf8'));
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('state must be an object');
   const item = value as Record<string, unknown>;
-  if (item.version !== 1 || !item.receipts || typeof item.receipts !== 'object' || Array.isArray(item.receipts)) throw new Error('unsupported state format');
-  if (Object.values(item.receipts).some((receipt) => typeof receipt !== 'string')) throw new Error('invalid state receipt');
-  return item as unknown as State;
+  if ((item.version !== 1 && item.version !== 2) || !item.receipts || typeof item.receipts !== 'object' || Array.isArray(item.receipts)) throw new Error('unsupported state format');
+  const receipts: Record<string, Receipt> = {};
+  for (const [key, receipt] of Object.entries(item.receipts)) {
+    if (item.version === 1 && typeof receipt === 'string') receipts[key] = { digest: receipt, revision: '' };
+    else if (item.version === 2 && receipt && typeof receipt === 'object' && typeof (receipt as Receipt).digest === 'string' && typeof (receipt as Receipt).revision === 'string') receipts[key] = receipt as Receipt;
+    else throw new Error('invalid state receipt');
+  }
+  return { version: 2, receipts };
 }
 async function saveState(path: string, state: State): Promise<void> {
   const temp = join(dirname(path), `.state-${process.pid}-${Date.now()}.tmp`);
@@ -112,6 +135,13 @@ function digest(policy: PluginPolicy, command: string): string {
 async function execute(command: string, cwd: string, environment: NodeJS.ProcessEnv): Promise<void> {
   await spawn(command, [], { cwd, env: environment, stdio: ['ignore', 'inherit', 'inherit'], shell: true });
 }
+function receiptRecord(key: string): string | undefined {
+  try {
+    return JSON.parse(key)[0];
+  } catch {
+    return undefined;
+  }
+}
 function lockLoadError(error: unknown): boolean {
   return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
 }
@@ -130,6 +160,9 @@ export async function runLifecycle(mode: Mode, options: RunOptions = {}): Promis
       const apmDirectory = await stat(apmHome);
       if (!apmDirectory.isDirectory()) throw error;
       locked = [];
+    } else if (mode === 'check' && lockLoadError(error)) {
+      output('nothing installed');
+      return 0;
     } else throw error;
   }
   const statePath = join(dirname(configPath), 'state.json');
@@ -164,6 +197,11 @@ export async function runLifecycle(mode: Mode, options: RunOptions = {}): Promis
           eventNames.has(policy.source);
         const anyStillInstalled = locked.some((plugin) => matchesSource(policy.source, plugin) && plugin.path === (policy.path ?? '.'));
         if (anyStillInstalled || !removedNameMatch) continue;
+        // APM keeps a folder holding files it did not write; report it, delete nothing
+        for (const key of receiptKeys) {
+          const destination: string = JSON.parse(key)[1];
+          if (existsSync(destination)) output(`left ${destination}`);
+        }
         const command = policy['post-uninstall'];
         if (!command) {
           for (const key of receiptKeys) delete state.receipts[key];
@@ -184,6 +222,7 @@ export async function runLifecycle(mode: Mode, options: RunOptions = {}): Promis
     }
     if (mode === 'run' && !options.event) throw new Error('run requires an APM event');
     const event = options.event?.event ?? 'post-install';
+    let installed = 0;
     for (const policy of config.plugins) {
       const command = event === 'post-update' ? (policy['post-update'] ?? policy['post-install']) : policy['post-install'];
       if (!command) continue;
@@ -194,33 +233,69 @@ export async function runLifecycle(mode: Mode, options: RunOptions = {}): Promis
         continue;
       }
       if (!matches.length) {
-        output(`skipped source not installed ${recordId(policy)}`);
+        if (mode === 'run') output(`skipped source not installed ${recordId(policy)}`);
         continue;
       }
+      installed++;
       const plugin = matches[0];
+      const id = recordId(policy);
       try {
-        const found = await destinations(plugin, policy, home, apmHome);
+        const recorded = Object.keys(state.receipts).filter((key) => receiptRecord(key) === id);
+        let found: string[];
+        try {
+          found = await destinations(plugin, policy, home, apmHome);
+        } catch (error) {
+          // check still reports a copy that was recorded and is now gone
+          if (mode === 'check' && recorded.length && (missing(error) || (error instanceof Error && error.message.startsWith('no ')))) found = [];
+          else throw error;
+        }
+        const gone = recorded.filter((key) => !existsSync(JSON.parse(key)[1]));
+        if (mode === 'run') {
+          // a copy that no longer exists loses its receipt, so the copy APM recreates in its place runs again
+          for (const key of gone) delete state.receipts[key];
+          if (gone.length) await saveState(statePath, state);
+        } else {
+          const validDigests = [policy['post-install'], policy['post-update']].filter((item): item is string => !!item).map((item) => digest(policy, item));
+          for (const key of gone) {
+            const receipt = state.receipts[key];
+            if (validDigests.includes(receipt.digest) && receipt.revision === plugin.revision) {
+              output(`broken ${id} ${JSON.parse(key)[1]}`);
+              failed++;
+            }
+          }
+          for (const destination of found) {
+            const receipt = state.receipts[receiptKey(policy, destination)];
+            let status = 'missing';
+            if (receipt) {
+              const current = validDigests.includes(receipt.digest) && receipt.revision === plugin.revision;
+              status = current ? 'ok' : 'stale';
+            }
+            output(`${status} ${id} ${destination}`);
+            if (status !== 'ok') failed++;
+          }
+          continue;
+        }
         for (const destination of found) {
           const key = receiptKey(policy, destination);
-          if (mode === 'check') {
-            const validDigests = [policy['post-install'], policy['post-update']].filter((item): item is string => !!item).map((item) => digest(policy, item));
-            const ready = validDigests.includes(state.receipts[key]);
-            output(`${ready ? 'ok' : 'missing'} ${recordId(policy)} ${destination}`);
-            if (!ready) failed++;
-          } else {
-            delete state.receipts[key];
-            await saveState(statePath, state);
-            await execute(command, destination, environment);
-            state.receipts[key] = digest(policy, command);
-            await saveState(statePath, state);
-            output(`ran ${recordId(policy)} ${destination}`);
+          const wanted = digest(policy, command);
+          const receipt = state.receipts[key];
+          if (receipt && receipt.digest === wanted && receipt.revision === plugin.revision) {
+            output(`current ${id} ${destination}`);
+            continue;
           }
+          delete state.receipts[key];
+          await saveState(statePath, state);
+          await execute(command, destination, environment);
+          state.receipts[key] = { digest: wanted, revision: plugin.revision };
+          await saveState(statePath, state);
+          output(`ran ${id} ${destination}`);
         }
       } catch (error) {
-        output(`failed ${recordId(policy)}: ${error instanceof Error ? error.message : String(error)}`);
+        output(`failed ${id}: ${error instanceof Error ? error.message : String(error)}`);
         failed++;
       }
     }
+    if (mode === 'check' && !installed && !failed) output('nothing installed');
     return failed ? 1 : 0;
   } finally {
     await release?.();

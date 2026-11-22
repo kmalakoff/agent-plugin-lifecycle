@@ -140,19 +140,28 @@ describe('recorded APM runs replayed through the runner', () => {
             const skillFolders = async (step: RecordedStep): Promise<string[]> => {
               if (!source.skill) return [];
               const raw = (parseYaml(step.lock) as { dependencies: { deployed_files?: string[] }[] }).dependencies[0];
-              const folders = new Set<string>([kept('skills', source.skill)]);
+              const folders = new Set<string>();
+              const nativeRoot = (parseYaml(step.lock) as { dependencies: { native_plugin?: { root: string } }[] }).dependencies[0]?.native_plugin?.root;
+              if (nativeRoot && (await exists(join(home, ...nativeRoot.split('/'), 'skills', source.skill)))) folders.add(join(home, ...nativeRoot.split('/'), 'skills', source.skill));
               for (const file of raw.deployed_files ?? []) {
                 const parts = file.split('/');
                 const index = parts.lastIndexOf('skills');
                 if (index >= 0 && parts[index + 1] === source.skill) folders.add(join(home, ...parts.slice(0, index + 2)));
               }
-              return [...folders];
+              // APM's kept skill is a destination only when no deployed copy exists
+              return folders.size ? [...folders] : [kept('skills', source.skill)];
             };
 
             await placeFiles(home, plugins, gitSteps[`${kind}-install`].deployed);
             await lock(gitSteps[`${kind}-install`]);
             await fire(gitSteps[`${kind}-install`]);
-            assert.equal(await readFile(kept('installed.marker'), 'utf8'), 'yes');
+            // the plugin's command runs in its native copy when the lock names one, otherwise in APM's kept copy
+            const nativeOf = (step: RecordedStep) => (parseYaml(step.lock) as { dependencies: { native_plugin?: { root: string } }[] }).dependencies[0]?.native_plugin?.root;
+            const pluginCopy = (step: RecordedStep, ...rest: string[]) => {
+              const native = source.skill ? undefined : nativeOf(step);
+              return native ? join(home, ...native.split('/'), ...rest) : kept(...rest);
+            };
+            if (!source.skill) assert.equal(await readFile(pluginCopy(gitSteps[`${kind}-install`], 'installed.marker'), 'utf8'), 'yes');
             for (const folder of await skillFolders(gitSteps[`${kind}-install`])) assert.equal(await readFile(join(folder, 'setup.done'), 'utf8'), home, `post-install ran in ${folder}`);
             assert.equal(await runLifecycle('check', options), 0);
 
@@ -161,7 +170,7 @@ describe('recorded APM runs replayed through the runner', () => {
             await placeFiles(home, plugins, gitSteps[`${kind}-update`].deployed);
             await lock(gitSteps[`${kind}-update`]);
             await fire(gitSteps[`${kind}-update`]);
-            assert.equal(await readFile(kept(updated ? 'updated.marker' : 'installed.marker'), 'utf8'), 'yes');
+            if (!source.skill) assert.equal(await readFile(pluginCopy(gitSteps[`${kind}-update`], updated ? 'updated.marker' : 'installed.marker'), 'utf8'), 'yes');
             for (const folder of await skillFolders(gitSteps[`${kind}-update`])) assert.equal(await readFile(join(folder, updated ? 'setup.updated' : 'setup.done'), 'utf8'), home, `the update command ran in ${folder}`);
             assert.equal(await runLifecycle('check', options), 0);
 

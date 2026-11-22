@@ -7,6 +7,8 @@ The plugin `plugins/notes` in `git@github.com:team/plugins.git` has an MCP serve
 `~/.apm/apm.yml`:
 
 ```yaml
+name: my-machine
+version: 0.0.0
 dependencies:
   apm:
     - git: git@github.com:team/plugins.git
@@ -15,11 +17,16 @@ dependencies:
 lifecycle:
   post-install:
     - run: agent-plugin-lifecycle run
+      timeoutSec: 300
   post-update:
     - run: agent-plugin-lifecycle run
+      timeoutSec: 300
   post-uninstall:
     - run: agent-plugin-lifecycle run
+      timeoutSec: 300
 ```
+
+After `apm install -g`, `agent-plugin-lifecycle check` prints `ok` for each copy.
 
 `~/.config/agent-plugin-lifecycle/config.json`:
 
@@ -42,7 +49,7 @@ lifecycle:
 }
 ```
 
-The first record installs the server's dependencies in each full plugin copy, so the server starts in every harness that registered it. The second installs the skill's dependencies in each copy of `notes-search`.
+The first record installs the server's dependencies in each full plugin copy a harness reads, so the server starts in every harness that registered it. The second installs the skill's dependencies in each copy of `notes-search`.
 
 ## A Python skill
 
