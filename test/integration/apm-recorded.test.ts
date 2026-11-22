@@ -47,13 +47,13 @@ describe('recorded APM runs replayed through the runner', () => {
       });
 
       it('every recorded lock parses and every recorded event is the shape the runner reads', () => {
-        const steps: [string, RecordedStep][] = [...Object.entries(recording.steps), ...Object.entries(recording.gitSteps ?? {}), ...Object.entries(recording.gitRootSteps ?? {})];
+        const steps: [string, RecordedStep][] = [...Object.entries(recording.steps), ...Object.entries(recording.gitSteps ?? {}), ...Object.entries(recording.gitRootSteps ?? {}), ...Object.entries(recording.gitSkillsSteps ?? {})];
         for (const [step, recorded] of steps) {
           if (!recorded.lock.trim()) continue; // APM deletes the lock when the last package is removed
           const rows = parseLock(parseYaml(recorded.lock));
           for (const row of rows) {
             if (step.startsWith('git')) {
-              const expected = recordedGitSource(recording, step.startsWith('gitroot-') ? 'gitroot' : 'git');
+              const expected = recordedGitSource(recording, step.startsWith('gitskills-') ? 'gitskills' : step.startsWith('gitroot-') ? 'gitroot' : 'git');
               assert.ok(row.host === expected.host && row.repo === expected.repo && row.path === expected.path && !row.localPath, `${step}: expected the Git-sourced Agent Plugin row`);
             } else assert.ok(row.localPath && row.repo.startsWith('_local/'), `${step}: expected local Agent Plugin rows`);
           }
@@ -115,9 +115,10 @@ describe('recorded APM runs replayed through the runner', () => {
       for (const [kind, label] of [
         ['git', 'subfolder'],
         ['gitroot', 'whole-repository'],
+        ['gitskills', 'plain skill repository'],
       ] as const)
         it(`runs the Git-sourced ${label} install, update and uninstall from the recorded locks and events`, async function () {
-          const recordedSteps = (kind === 'git' ? recording.gitSteps : recording.gitRootSteps) as Record<string, RecordedStep> | undefined;
+          const recordedSteps = { git: recording.gitSteps, gitroot: recording.gitRootSteps, gitskills: recording.gitSkillsSteps }[kind] as Record<string, RecordedStep> | undefined;
           const gitSteps = recordedSteps;
           if (!gitSteps) return this.skip(); // this recording predates the Git scenario; re-record it (README)
           const source = recordedGitSource(recording, kind);
@@ -134,20 +135,34 @@ describe('recorded APM runs replayed through the runner', () => {
             const fire = async (step: RecordedStep) => {
               for (const { payload } of step.events) assert.equal(await runLifecycle('run', { ...options, event: JSON.parse(relocate(payload, locations, true)) as LifecycleEvent }), 0);
             };
-            const kept = (...rest: string[]) => join(apmHome, 'apm_modules', ...source.repo.split('/'), ...source.path.split('/'), ...rest);
+            const kept = (...rest: string[]) => join(apmHome, 'apm_modules', ...source.repo.split('/'), ...(source.path === '.' ? [] : source.path.split('/')), ...rest);
+
+            const skillFolders = async (step: RecordedStep): Promise<string[]> => {
+              if (!source.skill) return [];
+              const raw = (parseYaml(step.lock) as { dependencies: { deployed_files?: string[] }[] }).dependencies[0];
+              const folders = new Set<string>([kept('skills', source.skill)]);
+              for (const file of raw.deployed_files ?? []) {
+                const parts = file.split('/');
+                const index = parts.lastIndexOf('skills');
+                if (index >= 0 && parts[index + 1] === source.skill) folders.add(join(home, ...parts.slice(0, index + 2)));
+              }
+              return [...folders];
+            };
 
             await placeFiles(home, plugins, gitSteps[`${kind}-install`].deployed);
             await lock(gitSteps[`${kind}-install`]);
             await fire(gitSteps[`${kind}-install`]);
             assert.equal(await readFile(kept('installed.marker'), 'utf8'), 'yes');
-            assert.equal(await readFile(kept('skills', 'greet', 'setup.done'), 'utf8'), home);
+            for (const folder of await skillFolders(gitSteps[`${kind}-install`])) assert.equal(await readFile(join(folder, 'setup.done'), 'utf8'), home, `post-install ran in ${folder}`);
             assert.equal(await runLifecycle('check', options), 0);
 
-            // APM sends post-install and then post-update for a moved pin; post-update has its own commands in the policy
+            // a tag source gets post-update (its own commands); a pin source gets post-install again
+            const updated = source.update === 'tag';
+            await placeFiles(home, plugins, gitSteps[`${kind}-update`].deployed);
             await lock(gitSteps[`${kind}-update`]);
             await fire(gitSteps[`${kind}-update`]);
-            assert.equal(await readFile(kept('updated.marker'), 'utf8'), 'yes');
-            assert.equal(await readFile(kept('skills', 'greet', 'setup.updated'), 'utf8'), home);
+            assert.equal(await readFile(kept(updated ? 'updated.marker' : 'installed.marker'), 'utf8'), 'yes');
+            for (const folder of await skillFolders(gitSteps[`${kind}-update`])) assert.equal(await readFile(join(folder, updated ? 'setup.updated' : 'setup.done'), 'utf8'), home, `the update command ran in ${folder}`);
             assert.equal(await runLifecycle('check', options), 0);
 
             for (const gone of gitSteps[`${kind}-update`].deployed.filter((path) => !gitSteps[`${kind}-uninstall`].deployed.includes(path))) safeRmSync(join(home, ...gone.split('/')));

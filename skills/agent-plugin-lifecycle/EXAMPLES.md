@@ -55,6 +55,26 @@ The first record installs the server's dependencies in each full plugin copy, so
 }
 ```
 
+## A repository of plain skills
+
+The repository `https://github.com/team/skills.git` holds `skills/<name>/SKILL.md` folders and no plugin manifest. Install one of its skills, `report`:
+
+```yaml
+dependencies:
+  apm:
+    - git: https://github.com/team/skills.git
+      skills:
+        - report
+```
+
+```json
+{
+  "source": "https://github.com/team/skills.git",
+  "skill": "report",
+  "post-install": "npm ci --no-bin-links"
+}
+```
+
 ## A local plugin with cleanup
 
 A plugin kept in a local folder is declared in `apm.yml` by its absolute path, and the record uses the same path:

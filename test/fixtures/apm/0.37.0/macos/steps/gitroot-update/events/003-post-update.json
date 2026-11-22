@@ -3,12 +3,12 @@
   "event": "post-update",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle",
-      "reference": "a6829cf567d46b158d19edcaa0c1e82aaced3904"
+      "name": "obra/superpowers",
+      "reference": "22f0b463e7a5e579904dd6211a520321035526f7"
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:46:19Z",
+  "timestamp": "2026-11-22T08:44:03Z",
   "cli_version": "0.37.0",
   "working_directory": "."
 }

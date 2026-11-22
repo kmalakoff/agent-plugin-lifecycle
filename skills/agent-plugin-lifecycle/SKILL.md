@@ -69,7 +69,11 @@ Rules for the commands:
 - Use `npm ci --no-bin-links` (or `npm_config_bin_links=false`). APM fingerprints the Claude Code plugin copy and refuses later installs when that copy contains a symlink, which `node_modules/.bin` would add. Keep other symlinks out of deployed copies the same way.
 - `post-uninstall` runs from the home folder after the plugin's files are gone, so it calls a file the owner keeps outside the plugin.
 
+For a repository of plain skills (`skills/<name>/SKILL.md`, no plugin manifest), select the skills on its `apm.yml` entry with `skills: [name]` (what `apm install owner/repo --skill name` writes), and give each skill a record with `source` and `skill` and no `path`.
+
 Then run `apm install` (or `apm update`) as usual; the commands run inside it.
+
+`apm update` moves a pinned source only to a newer release tag and then fires `post-update`. For a source without release tags, change the pin and run `apm install --update`; that fires `post-install`, and the commands still run because `post-update` defaults to `post-install`.
 
 ## Check a machine
 

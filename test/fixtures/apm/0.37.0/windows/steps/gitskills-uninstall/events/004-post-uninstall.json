@@ -3,12 +3,12 @@
   "event": "post-uninstall",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle/lifecycle-demo",
+      "name": "vercel-labs/skills",
       "reference": null
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:46:14Z",
+  "timestamp": "2026-11-22T08:51:38Z",
   "cli_version": "0.37.0",
   "working_directory": "<HOME>"
 }

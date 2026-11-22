@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { runLifecycle } from 'agent-plugin-lifecycle';
 import { safeRmSync } from 'fs-remove-compat';
-import { stringify } from 'yaml';
+import { parse as parseYaml, stringify } from 'yaml';
 import { listRecordings, loadRecording, makeAccount, PLUGIN, type Recording, recordedGitSource, relocate, removeAccount } from '../lib/apm-live.ts';
 
 function isolatedEnvironment(home: string): NodeJS.ProcessEnv {
@@ -31,6 +31,9 @@ async function recordedGitInstall(home: string, kind: 'git' | 'gitroot' = 'git')
   const source = recordedGitSource(recording, kind);
   const kept = join(home, '.apm', 'apm_modules', ...source.repo.split('/'), ...(source.path === '.' ? [] : source.path.split('/')));
   await mkdir(kept, { recursive: true });
+  const text = relocate((steps as Record<string, { lock: string }>)[`${kind}-install`].lock, { home, plugins: join(home, 'plugins') }, false);
+  // APM's native Claude plugin copy, which the lock names and the runner also runs in
+  for (const row of (parseYaml(text) as { dependencies: { native_plugin?: { root: string } }[] }).dependencies) if (row.native_plugin) await mkdir(join(home, ...row.native_plugin.root.split('/')), { recursive: true });
   return { source, kept, lock: relocate((steps as Record<string, { lock: string }>)[`${kind}-install`].lock, { home, plugins: join(home, 'plugins') }, false) };
 }
 describe('APM lifecycle dispatch', () => {

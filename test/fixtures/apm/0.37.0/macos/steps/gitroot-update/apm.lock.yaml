@@ -2,12 +2,112 @@ lockfile_version: "4"
 apm_version: 0.37.0
 manifest_targets: []
 dependencies:
-  - repo_url: kmalakoff/agent-plugin-lifecycle
-    name: lifecycle-demo
+  - repo_url: obra/superpowers
+    name: superpowers
     host: github.com
-    resolved_commit: a6829cf567d46b158d19edcaa0c1e82aaced3904
-    resolved_ref: a6829cf567d46b158d19edcaa0c1e82aaced3904
-    version: 1.0.0
-    package_type: agent_plugin
-    content_hash: sha256:775212901e7dc37c4520d4771624cc0be7062be3974bf3dc4e377d4eeae03dc1
+    resolved_commit: 22f0b463e7a5e579904dd6211a520321035526f7
+    resolved_ref: 22f0b463e7a5e579904dd6211a520321035526f7
+    version: 7.0.2
+    package_type: marketplace_plugin
+    content_hash: sha256:ef6b9a54390d9807ffcc22954f61216e2eab2364e8e4646648b3fb3ee0e5e067
+    resolved_tag: v7.0.2
+    declared_license: MIT
+    carried_licenses:
+      - path: .apm/skills/brainstorming/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/diagnosing-superpowers/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/dispatching-parallel-agents/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/executing-plans/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/finishing-a-development-branch/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/receiving-code-review/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/requesting-code-review/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/subagent-driven-development/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/systematic-debugging/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/test-driven-development/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/using-git-worktrees/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/using-superpowers/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/verification-before-completion/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/writing-plans/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: .apm/skills/writing-skills/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/brainstorming/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/diagnosing-superpowers/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/dispatching-parallel-agents/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/executing-plans/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/finishing-a-development-branch/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/receiving-code-review/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/requesting-code-review/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/subagent-driven-development/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/systematic-debugging/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/test-driven-development/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/using-git-worktrees/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/using-superpowers/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/verification-before-completion/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/writing-plans/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+      - path: skills/writing-skills/LICENSE
+        source: LICENSE
+        hash: sha256:a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400
+    native_plugin:
+      name: superpowers
+      root: .agents/plugins/superpowers
+      fingerprint: sha256:528b855d184a01820e0f2844896ce3f8ba00b97d03f55a8e3d0eb2f84334089b
+      marketplace:
+        name: apm-u-cc4642de
+        path: <HOME>/.agents/plugins
 deployments: []

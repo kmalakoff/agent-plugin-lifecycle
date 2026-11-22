@@ -3,12 +3,12 @@
   "event": "post-uninstall",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle",
+      "name": "obra/superpowers",
       "reference": null
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:46:20Z",
+  "timestamp": "2026-11-22T08:44:05Z",
   "cli_version": "0.37.0",
   "working_directory": "<HOME>"
 }

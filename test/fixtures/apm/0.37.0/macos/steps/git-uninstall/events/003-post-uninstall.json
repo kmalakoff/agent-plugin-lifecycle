@@ -3,12 +3,12 @@
   "event": "post-uninstall",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle/lifecycle-demo",
+      "name": "anthropics/claude-plugins-official/plugins/commit-commands",
       "reference": null
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:47:17Z",
+  "timestamp": "2026-11-22T08:43:55Z",
   "cli_version": "0.37.0",
   "working_directory": "<HOME>"
 }

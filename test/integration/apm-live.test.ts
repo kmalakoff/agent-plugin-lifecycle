@@ -1,6 +1,6 @@
 // Live APM suite. Runs the real `apm` binary and the built CLI; needs APM on PATH. The local-plugin scenario needs no
 // network; the Git-sourced scenario installs the test plugin from this repository's public HTTPS URL at two pinned commits
-// (GIT_SOURCE and GIT_ROOT_SOURCE in test/lib/apm-live.ts) and needs the network and those commits on GitHub. Everything APM and the CLI write
+// (GIT_SOURCE, GIT_ROOT_SOURCE and GIT_SKILLS_SOURCE in test/lib/apm-live.ts) and needs the network and those commits on GitHub. Everything APM and the CLI write
 // stays inside a disposable home under .tmp/, never the developer's real account.
 //
 //   TEST_APM_STRICT=true   a missing `apm` fails the suite instead of skipping it (CI sets this)
@@ -20,6 +20,8 @@ import {
   deepShape,
   GIT_ROOT_SOURCE,
   GIT_ROOT_STEPS,
+  GIT_SKILLS_SOURCE,
+  GIT_SKILLS_STEPS,
   GIT_SOURCE,
   GIT_STEPS,
   type GitSource,
@@ -229,23 +231,24 @@ describe('live APM lifecycle (real apm, user scope, disposable home)', function 
   });
 });
 
-/** Why the pinned commits cannot be installed, or undefined when both are fetchable from the Git host. */
+/** Why the pinned commits cannot be installed, or undefined when every pin is fetchable from the Git host. */
 function unreachablePins(source: GitSource): string | undefined {
   mkdirSync(join(packageRoot, '.tmp'), { recursive: true });
   const dir = mkdtempSync(join(packageRoot, '.tmp', 'git-probe-'));
   const env = isolatedEnvironment(dir);
-  const git = (args: string[]) => spawn.sync('git', args, { cwd: dir, env, encoding: 'utf8', timeout: 90000 }); // throws on a failing exit
+  const git = (args: string[]) => spawn.sync('git', args, { cwd: dir, env, encoding: 'utf8' }); // throws on a failing exit
   try {
     try {
       git(['init', '-q']);
     } catch (error) {
       return `git is not usable: ${error instanceof Error ? error.message : String(error)}`;
     }
-    for (const { sha } of Object.values(source.pins)) {
+    for (const sha of Object.values(source.pins)) {
+      if (!sha) continue;
       try {
         git(['fetch', '-q', '--depth=1', `${source.url}.git`, sha]);
       } catch (error) {
-        return `pinned commit ${sha} is not reachable at ${source.url} (${error instanceof Error ? error.message : String(error)}). The two pinned commits on branch ${source.branch} (test/lib/apm-live.ts) must be pushed to GitHub, and the host must be reachable.`;
+        return `pinned commit ${sha} is not reachable at ${source.url} (${error instanceof Error ? error.message : String(error)}). The pins in test/lib/apm-live.ts must be reachable on that public host.`;
       }
     }
     return undefined;
@@ -254,21 +257,36 @@ function unreachablePins(source: GitSource): string | undefined {
   }
 }
 
-/** One Git-sourced scenario: install at the first pin, edit the pin to the second and `apm update`, uninstall. */
+/**
+ * One Git-sourced scenario against a real public repository: install at an old pin, update, uninstall. A `tag` source runs
+ * `apm update` (APM moves the pin to the latest annotated release and fires post-update); a `pin` source edits the pin to a
+ * second fixed commit and runs `apm install --update`. Only what holds for any newer release is asserted.
+ */
 function describeGitScenario(title: string, source: GitSource, steps: { install: AnyStep; update: AnyStep; uninstall: AnyStep }, prefix: string): void {
   describe(title, function () {
-    this.timeout(300000);
+    this.timeout(600000);
     let account: Session;
     const { first, second } = source.pins;
     const whole = source.path === '.';
     const packageName = whole ? source.repo : `${source.repo}/${source.path}`;
-    const dependency = (sha: string) => `    - git: ${source.url}.git\n${whole ? '' : `      path: ${source.path}\n`}      ref: ${sha}\n`;
+    const dependency = (sha: string) => `    - git: ${source.url}.git\n${whole ? '' : `      path: ${source.path}\n`}      ref: ${sha}\n${source.select ? `      skills:\n${source.select.map((name) => `        - ${name}\n`).join('')}` : ''}`;
     const keptParts = ['.apm', 'apm_modules', ...source.repo.split('/'), ...(whole ? [] : source.path.split('/'))];
     const kept = (home: string, ...rest: string[]) => join(home, ...keptParts, ...rest);
     const row = async (lock: string) => {
       const rows = parseLock(parseYaml(lock));
-      assert.equal(rows.length, 1, 'one locked Git plugin');
+      assert.equal(rows.length, 1, 'one locked Git package');
       return { plugin: rows[0], raw: (parseYaml(lock) as { dependencies: Record<string, unknown>[] }).dependencies[0] };
+    };
+    // every deployed copy of the skill that APM reports in the lock, as absolute folders under the home, plus the kept copy
+    const skillCopies = (home: string, raw: Record<string, unknown>): string[] => {
+      if (!source.skill) return [];
+      const folders = new Set<string>([kept(home, 'skills', source.skill)]);
+      for (const file of (raw.deployed_files as string[] | undefined) ?? []) {
+        const parts = file.split('/');
+        const index = parts.lastIndexOf('skills');
+        if (index >= 0 && parts[index + 1] === source.skill) folders.add(join(home, ...parts.slice(0, index + 2)));
+      }
+      return [...folders];
     };
 
     before(async function () {
@@ -283,45 +301,54 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
         this.skip();
       }
       account = await openSession(prefix, gitLifecycleConfig(source));
-      await account.writeManifest(dependency(first.sha));
+      await account.writeManifest(dependency(first));
     });
 
     after(async () => {
       if (account) removeAccount(account.root);
     });
 
-    it('install at the first pinned commit: the lock records the Git source and commit, post-install fires, the commands run, check passes', async () => {
-      const { apmRun, snapshot, home, check, inHome } = account;
-      apmRun(['install', '-g', '--target', 'copilot']);
+    it('install at the old pin: the lock records the Git source and commit, post-install fires, the commands run in every deployed copy, check passes', async () => {
+      const { apmRun, snapshot, home, check } = account;
+      apmRun(['install', '-g', '--target', source.target]);
       const { lock, fresh } = await snapshot(steps.install);
       const { plugin, raw } = await row(lock);
       assert.equal(raw.host, source.host);
       assert.equal(raw.repo_url, source.repo);
       assert.equal(raw.virtual_path ?? '.', source.path);
-      assert.equal(raw.resolved_commit, first.sha);
+      assert.equal(raw.resolved_commit, first);
       assert.deepEqual([plugin.host, plugin.repo, plugin.path], [source.host, source.repo, source.path]);
       assert.deepEqual(eventNames(fresh), ['post-install.json']);
-      assert.match(await readFile(kept(home, 'skills', 'greet', 'SKILL.md'), 'utf8'), new RegExp(first.content));
       assert.equal(await readFile(kept(home, 'installed.marker'), 'utf8'), 'yes');
-      assert.equal(await inHome(...keptParts, 'skills', 'greet', 'setup.done'), await realpath(home));
+      const native = (raw.native_plugin as { root: string } | undefined)?.root;
+      if (native) assert.equal(await readFile(join(home, ...native.split('/'), 'installed.marker'), 'utf8'), 'yes', 'the whole-package command also ran in the native plugin copy');
+      for (const folder of skillCopies(home, raw)) {
+        assert.equal(await readFile(join(folder, 'SKILL.md'), 'utf8').then((text) => text.length > 0), true, `${folder} holds the skill`);
+        assert.equal(await readFile(join(folder, 'setup.done'), 'utf8'), home, `post-install ran in ${folder}`);
+      }
       const result = check();
       assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     });
 
-    it('update to the second pinned commit: apm.yml moves the pin, `apm update` fires post-update, the runner runs it, check passes', async () => {
+    it(`update (${source.update === 'tag' ? '`apm update` moves the pin to the latest release' : 'the pin is edited to a second fixed commit and `apm install --update` runs'}): the ref changed, the lifecycle event fires, the commands run in every deployed copy, check passes`, async () => {
       const { apmRun, snapshot, home, check, lockText, writeManifest } = account;
-      const before = (await row(await lockText())).plugin.revision;
-      await writeManifest(dependency(second.sha));
-      apmRun(['update', '-g', '--yes']);
+      const before = await row(await lockText());
+      if (source.update === 'tag') apmRun(['update', '-g', '--yes', '--target', source.target]);
+      else {
+        assert.ok(second, 'a pin source needs a second commit');
+        await writeManifest(dependency(second));
+        apmRun(['install', '-g', '--update', '--target', source.target]);
+      }
       const { lock, fresh } = await snapshot(steps.update);
       const { plugin, raw } = await row(lock);
-      assert.equal(raw.resolved_commit, second.sha);
-      assert.notEqual(plugin.revision, before);
-      // APM 0.37.0 fires post-install (it re-materialises the package) and then post-update for a moved pin
-      assert.deepEqual(eventNames(fresh), ['post-install.json', 'post-update.json']);
-      assert.match(await readFile(kept(home, 'skills', 'greet', 'SKILL.md'), 'utf8'), new RegExp(second.content));
-      assert.equal(await readFile(kept(home, 'updated.marker'), 'utf8'), 'yes');
-      assert.equal(await readFile(kept(home, 'skills', 'greet', 'setup.updated'), 'utf8'), home);
+      assert.notEqual(raw.resolved_commit, first, 'the locked commit moved');
+      if (second) assert.equal(raw.resolved_commit, second);
+      assert.notEqual(plugin.revision, before.plugin.revision);
+      const names = eventNames(fresh);
+      if (source.update === 'tag') assert.ok(names.includes('post-update.json'), `APM did not fire post-update: ${names}`);
+      else assert.ok(names.includes('post-install.json'), `APM did not fire post-install: ${names}`);
+      assert.equal(await readFile(kept(home, source.update === 'tag' ? 'updated.marker' : 'installed.marker'), 'utf8'), source.update === 'tag' ? 'yes' : 'yes');
+      for (const folder of skillCopies(home, raw)) assert.equal(await readFile(join(folder, source.update === 'tag' ? 'setup.updated' : 'setup.done'), 'utf8'), home, `the update command ran in ${folder}`);
       const result = check();
       assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     });
@@ -332,8 +359,7 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
       const { fresh } = await snapshot(steps.uninstall);
       assert.deepEqual(eventNames(fresh), ['post-uninstall.json']);
       const named = JSON.parse(fresh[0].payload).packages.map((item: { name: string }) => item.name);
-      assert.equal(named.length, 1, `post-uninstall named ${JSON.stringify(named)}`);
-      assert.equal(named[0], packageName, 'the name APM sends on uninstall');
+      assert.deepEqual(named, [packageName], 'the name APM sends on uninstall');
       await assert.rejects(() => stat(kept(home)), { code: 'ENOENT' });
     });
 
@@ -343,8 +369,11 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
   });
 }
 
-describeGitScenario('live APM lifecycle from a Git subfolder (this repository on GitHub, branch apm-test-plugin, two pinned commits)', GIT_SOURCE, { install: 'git-install', update: 'git-update', uninstall: 'git-uninstall' }, 'apm-live-git');
-describeGitScenario('live APM lifecycle from a whole Git repository (this repository on GitHub, branch apm-test-plugin-root, two pinned commits)', GIT_ROOT_SOURCE, { install: 'gitroot-install', update: 'gitroot-update', uninstall: 'gitroot-uninstall' }, 'apm-live-gitroot');
+describeGitScenario('live APM lifecycle from a Git subfolder (anthropics/claude-plugins-official, plugins/commit-commands, no release tags)', GIT_SOURCE, { install: 'git-install', update: 'git-update', uninstall: 'git-uninstall' }, 'apm-live-git');
+describeGitScenario('live APM lifecycle from a whole Git repository (obra/superpowers, pinned at v7.0.0)', GIT_ROOT_SOURCE, { install: 'gitroot-install', update: 'gitroot-update', uninstall: 'gitroot-uninstall' }, 'apm-live-gitroot');
+describeGitScenario('live APM lifecycle from a plain skill repository (vercel-labs/skills, pinned at v1.2.0, skills: [find-skills])', GIT_SKILLS_SOURCE, { install: 'gitskills-install', update: 'gitskills-update', uninstall: 'gitskills-uninstall' }, 'apm-live-gitskills');
+
+const provenanceOf = (source: GitSource) => ({ url: source.url, path: source.path, skill: source.skill, select: source.select, update: source.update, target: source.target, first: source.pins.first, second: source.pins.second });
 
 describe('live APM recordings', function () {
   this.timeout(180000);
@@ -365,6 +394,7 @@ describe('live APM recordings', function () {
     for (const step of STEPS) compare(step, fixture.steps[step]);
     if (recorded[GIT_STEPS[0]] && fixture.gitSteps) for (const step of GIT_STEPS) compare(step, fixture.gitSteps[step]);
     if (recorded[GIT_ROOT_STEPS[0]] && fixture.gitRootSteps) for (const step of GIT_ROOT_STEPS) compare(step, fixture.gitRootSteps[step]);
+    if (recorded[GIT_SKILLS_STEPS[0]] && fixture.gitSkillsSteps) for (const step of GIT_SKILLS_STEPS) compare(step, fixture.gitSkillsSteps[step]);
   });
 
   // Runs last: writes what the scenarios above saw. The local scenario is required; the Git scenario is recorded when it ran.
@@ -376,7 +406,7 @@ describe('live APM recordings', function () {
 
   async function writeRecording(): Promise<void> {
     const dir = join(recordingsRoot, apm?.version ?? 'unknown', osLabel());
-    const steps = [...STEPS, ...GIT_STEPS, ...GIT_ROOT_STEPS].filter((step) => recorded[step]);
+    const steps = [...STEPS, ...GIT_STEPS, ...GIT_ROOT_STEPS, ...GIT_SKILLS_STEPS].filter((step) => recorded[step]);
     safeRmSync(dir);
     for (const step of steps) {
       const base = join(dir, 'steps', step);
@@ -395,8 +425,9 @@ describe('live APM recordings', function () {
       recorded_at: new Date().toISOString(),
       environment: process.env.TEST_APM_RECORD_ENVIRONMENT ?? null,
       plugin_fixtures_sha256: await hashTree(pluginFixtures),
-      git_root_source: recorded[GIT_ROOT_STEPS[0]] ? { url: GIT_ROOT_SOURCE.url, path: GIT_ROOT_SOURCE.path, first: GIT_ROOT_SOURCE.pins.first.sha, second: GIT_ROOT_SOURCE.pins.second.sha } : null,
-      git_source: recorded[GIT_STEPS[0]] ? { url: GIT_SOURCE.url, path: GIT_SOURCE.path, first: GIT_SOURCE.pins.first.sha, second: GIT_SOURCE.pins.second.sha } : null,
+      git_skills_source: recorded[GIT_SKILLS_STEPS[0]] ? provenanceOf(GIT_SKILLS_SOURCE) : null,
+      git_root_source: recorded[GIT_ROOT_STEPS[0]] ? provenanceOf(GIT_ROOT_SOURCE) : null,
+      git_source: recorded[GIT_STEPS[0]] ? provenanceOf(GIT_SOURCE) : null,
       commands,
       paths: 'absolute paths are stored as <HOME> (the recorded account home) and <PLUGINS> (the plugin source copy)',
     };

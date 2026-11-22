@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "event": "post-install",
+  "packages": [
+    {
+      "name": "vercel-labs/skills",
+      "reference": "cca706a50522ffade404618e23a2009f07c64828"
+    }
+  ],
+  "scope": "user",
+  "timestamp": "2026-11-22T08:44:08Z",
+  "cli_version": "0.37.0",
+  "working_directory": "<HOME>/.apm"
+}

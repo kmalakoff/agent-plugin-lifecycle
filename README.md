@@ -62,9 +62,17 @@ Each record names one plugin or skill:
 | `post-update` | Runs in each deployed copy after update; defaults to `post-install` |
 | `post-uninstall` | Runs once after APM removes the plugin |
 
+A repository of plain skills (`skills/<name>/SKILL.md`, no plugin manifest) works the same way: select the skills on its `apm.yml` entry with `skills: [name]` (what `apm install owner/repo --skill name` writes), and give each one a record with `source` and `skill`, no `path`:
+
+```json
+{ "source": "https://github.com/team/skills.git", "skill": "report", "post-install": "npm ci --no-bin-links" }
+```
+
 A full example is in [config/config.example.json](config/config.example.json).
 
 Then run `apm install` or `apm update` as usual; your commands run inside it.
+
+APM fires `post-update` when `apm update` moves a pinned source to a newer release tag. A source pinned to a commit in a repository without release tags does not move on `apm update`: change the pin and run `apm install --update`, which fires `post-install`. Either way your commands run, because `post-update` defaults to `post-install`.
 
 ## Check the result
 

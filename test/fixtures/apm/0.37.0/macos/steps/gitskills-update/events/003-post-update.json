@@ -3,12 +3,12 @@
   "event": "post-update",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle",
-      "reference": "bbf4b3c35e32cb68711e44df0f9f430da314d130"
+      "name": "vercel-labs/skills",
+      "reference": "50894c1d98bc45ca1ab127213e59d6525065b5e7"
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:47:17Z",
+  "timestamp": "2026-11-22T08:44:11Z",
   "cli_version": "0.37.0",
   "working_directory": "."
 }

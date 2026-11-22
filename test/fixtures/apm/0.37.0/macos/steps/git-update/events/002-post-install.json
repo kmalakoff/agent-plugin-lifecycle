@@ -3,12 +3,12 @@
   "event": "post-install",
   "packages": [
     {
-      "name": "kmalakoff/agent-plugin-lifecycle",
-      "reference": "bbf4b3c35e32cb68711e44df0f9f430da314d130"
+      "name": "anthropics/claude-plugins-official",
+      "reference": "d5c15b861cd23e3102215c26020368ad5134dc47"
     }
   ],
   "scope": "user",
-  "timestamp": "2026-11-22T04:46:12Z",
+  "timestamp": "2026-11-22T08:43:55Z",
   "cli_version": "0.37.0",
-  "working_directory": "."
+  "working_directory": "<HOME>/.apm"
 }

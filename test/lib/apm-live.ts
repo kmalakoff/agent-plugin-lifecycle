@@ -28,46 +28,63 @@ export type GitStep = (typeof GIT_STEPS)[number];
 /** The whole-repository Git scenario: the plugin sits at the repository root (`path: .`). */
 export const GIT_ROOT_STEPS = ['gitroot-install', 'gitroot-update', 'gitroot-uninstall'] as const;
 export type GitRootStep = (typeof GIT_ROOT_STEPS)[number];
-export type AnyStep = Step | GitStep | GitRootStep;
+/** The plain skill repository scenario: a repository of bare `skills/<name>/SKILL.md` folders with no manifest, one skill selected with `skills:`. */
+export const GIT_SKILLS_STEPS = ['gitskills-install', 'gitskills-update', 'gitskills-uninstall'] as const;
+export type GitSkillsStep = (typeof GIT_SKILLS_STEPS)[number];
+export type AnyStep = Step | GitStep | GitRootStep | GitSkillsStep;
 
 /**
- * The real HTTPS Git host for the Git-sourced scenario is this public repository, but not its `master` (that history is squashed
- * before publishing, which would drop pinned commits): the plugin lives on the orphan branch `apm-test-plugin`, which holds only
- * `lifecycle-demo/` in exactly two commits and must never be rewritten or deleted. The scenario installs the plugin from that
- * folder at `first`, then edits the pin in `apm.yml` to `second` and runs `apm update` (APM moves a full-SHA pin only when the
- * manifest changes). The two commits differ in a `Content version: N` line in `skills/greet/SKILL.md`.
+ * The Git-sourced scenarios install real, popular public repositories the way a client does, never anything of ours.
+ * `update: 'tag'` sources are pinned to the commit of an old annotated release tag; `apm update` moves a full-SHA pin to the
+ * latest annotated semver tag, fires post-update, and so the scenario asserts only what holds for any newer release.
+ * `update: 'pin'` is for a source without release tags: the test edits the pin to a second fixed commit and runs
+ * `apm install --update` (post-install fires again). `skill` is the skill the config records by name; `select` is the `skills:`
+ * selection written to apm.yml. The configured commands are always our own marker commands, never code from these repositories.
  */
 export interface GitSource {
   url: string;
   host: string;
   repo: string;
-  branch: string;
   path: string;
-  pins: { first: { sha: string; content: string }; second: { sha: string; content: string } };
+  skill?: string;
+  select?: string[];
+  update: 'tag' | 'pin';
+  /** The `--target` the scenario installs for; APM refuses obra/superpowers' hook files for the copilot target. */
+  target: 'copilot' | 'claude';
+  pins: { first: string; second?: string };
 }
+/** A plugin in a repository subfolder (`plugins/commit-commands`); the source has no release tags and no skills. */
 export const GIT_SOURCE: GitSource = {
-  url: 'https://github.com/kmalakoff/agent-plugin-lifecycle',
+  url: 'https://github.com/anthropics/claude-plugins-official',
   host: 'github.com',
-  repo: 'kmalakoff/agent-plugin-lifecycle',
-  branch: 'apm-test-plugin',
-  path: 'lifecycle-demo',
-  pins: {
-    first: { sha: '440b061092fe164a82750e901fc49bcd77c858e6', content: 'Content version: 1' },
-    second: { sha: 'bbf4b3c35e32cb68711e44df0f9f430da314d130', content: 'Content version: 2' },
-  },
+  repo: 'anthropics/claude-plugins-official',
+  path: 'plugins/commit-commands',
+  update: 'pin',
+  target: 'copilot',
+  pins: { first: '27d2b86d72da27c64585150857cee8472ad47abb', second: 'd5c15b861cd23e3102215c26020368ad5134dc47' },
 };
-
-/** The same plugin at the repository root, on the orphan branch `apm-test-plugin-root` (two commits, same rules as above). */
+/** A plugin at the repository root (obra/superpowers, annotated tag v7.0.0). */
 export const GIT_ROOT_SOURCE: GitSource = {
-  url: 'https://github.com/kmalakoff/agent-plugin-lifecycle',
+  url: 'https://github.com/obra/superpowers',
   host: 'github.com',
-  repo: 'kmalakoff/agent-plugin-lifecycle',
-  branch: 'apm-test-plugin-root',
+  repo: 'obra/superpowers',
   path: '.',
-  pins: {
-    first: { sha: 'b4d602c158f866a09e1068befdcb197b68b47320', content: 'Content version: 1' },
-    second: { sha: 'a6829cf567d46b158d19edcaa0c1e82aaced3904', content: 'Content version: 2' },
-  },
+  skill: 'using-superpowers',
+  update: 'tag',
+  target: 'claude',
+  pins: { first: 'bb92a77741419a4ab5f06e711a283343f1ada0c3' },
+};
+/** A plain skill repository (bare `skills/<name>/SKILL.md`, no manifest; vercel-labs/skills, annotated tag v1.2.0), one skill selected with `skills:`. */
+export const GIT_SKILLS_SOURCE: GitSource = {
+  url: 'https://github.com/vercel-labs/skills',
+  host: 'github.com',
+  repo: 'vercel-labs/skills',
+  path: '.',
+  skill: 'find-skills',
+  select: ['find-skills'],
+  update: 'tag',
+  target: 'copilot',
+  pins: { first: 'cca706a50522ffade404618e23a2009f07c64828' },
 };
 
 /**
@@ -141,17 +158,13 @@ export function lifecycleConfig(plugins: string): { version: 1; plugins: Record<
   };
 }
 
-/** The runner's policy for the Git-sourced test plugin: markers in the folders the runner chose, one set for the plugin folder and one for its skill. */
-export function gitLifecycleConfig(source: { url: string; path: string } = GIT_SOURCE): { version: 1; plugins: Record<string, string>[] } {
+/** The runner's policy for a Git-sourced package: markers in the folders the runner chose, one record for the whole package and, when the source has a skill, one for that skill. */
+export function gitLifecycleConfig(source: GitSource): { version: 1; plugins: Record<string, string>[] } {
   const write = (file: string, value: string) => `node -e "require('fs').writeFileSync('${file}',${value})"`;
   const where: Record<string, string> = source.path === '.' ? {} : { path: source.path };
-  return {
-    version: 1,
-    plugins: [
-      { source: source.url, ...where, 'post-install': write('installed.marker', "'yes'"), 'post-update': write('updated.marker', "'yes'"), 'post-uninstall': write('cleanup.done', "'ok'") },
-      { source: source.url, ...where, skill: 'greet', 'post-install': write('setup.done', 'process.env.HOME'), 'post-update': write('setup.updated', 'process.env.HOME') },
-    ],
-  };
+  const plugins: Record<string, string>[] = [{ source: source.url, ...where, 'post-install': write('installed.marker', "'yes'"), 'post-update': write('updated.marker', "'yes'"), 'post-uninstall': write('cleanup.done', "'ok'") }];
+  if (source.skill) plugins.push({ source: source.url, ...where, skill: source.skill, 'post-install': write('setup.done', 'process.env.HOME'), 'post-update': write('setup.updated', 'process.env.HOME') });
+  return { version: 1, plugins };
 }
 
 export function deepShape(value: unknown): unknown {
@@ -202,6 +215,8 @@ export interface Recording {
   gitSteps?: Record<GitStep, RecordedStep>;
   /** Present when the recording includes the whole-repository Git scenario. */
   gitRootSteps?: Record<GitRootStep, RecordedStep>;
+  /** Present when the recording includes the plain skill repository scenario. */
+  gitSkillsSteps?: Record<GitSkillsStep, RecordedStep>;
 }
 async function loadStep(dir: string, step: AnyStep): Promise<RecordedStep> {
   const base = join(dir, 'steps', step);
@@ -214,11 +229,12 @@ async function loadStep(dir: string, step: AnyStep): Promise<RecordedStep> {
   };
 }
 /** Where a Git scenario of a recording installed from (its provenance), which can differ from the constants if the pins moved. */
-export function recordedGitSource(recording: Recording, kind: 'git' | 'gitroot' = 'git'): { url: string; path: string; repo: string; host: string } {
-  const source = recording.provenance[kind === 'git' ? 'git_source' : 'git_root_source'] as { url: string; path: string } | null | undefined;
-  if (!source) throw new Error(`${recording.dir} has no ${kind === 'git' ? 'git_source' : 'git_root_source'} in provenance.json`);
+export function recordedGitSource(recording: Recording, kind: 'git' | 'gitroot' | 'gitskills' = 'git'): GitSource {
+  const key = { git: 'git_source', gitroot: 'git_root_source', gitskills: 'git_skills_source' }[kind];
+  const source = recording.provenance[key] as { url: string; path: string; skill?: string; select?: string[]; update: 'tag' | 'pin'; target: 'copilot' | 'claude'; first: string; second?: string } | null | undefined;
+  if (!source) throw new Error(`${recording.dir} has no ${key} in provenance.json`);
   const parts = new URL(source.url).pathname.replace(/^\/|\.git$/g, '');
-  return { url: source.url, path: source.path, repo: parts, host: new URL(source.url).hostname };
+  return { url: source.url, path: source.path, skill: source.skill, select: source.select, update: source.update, target: source.target, repo: parts, host: new URL(source.url).hostname, pins: { first: source.first, second: source.second } };
 }
 export async function loadRecording(dir: string): Promise<Recording> {
   const provenance = JSON.parse(await readFile(join(dir, 'provenance.json'), 'utf8'));
@@ -234,8 +250,13 @@ export async function loadRecording(dir: string): Promise<Recording> {
     gitRootSteps = {} as Record<GitRootStep, RecordedStep>;
     for (const step of GIT_ROOT_STEPS) gitRootSteps[step] = await loadStep(dir, step);
   }
+  let gitSkillsSteps: Record<GitSkillsStep, RecordedStep> | undefined;
+  if (existsSync(join(dir, 'steps', GIT_SKILLS_STEPS[0]))) {
+    gitSkillsSteps = {} as Record<GitSkillsStep, RecordedStep>;
+    for (const step of GIT_SKILLS_STEPS) gitSkillsSteps[step] = await loadStep(dir, step);
+  }
   const parts = relative(recordingsRoot, dir).split(sep);
-  return { dir, version: parts[0], os: parts[1], provenance, steps, gitSteps, gitRootSteps };
+  return { dir, version: parts[0], os: parts[1], provenance, steps, gitSteps, gitRootSteps, gitSkillsSteps };
 }
 export function listRecordings(): string[] {
   const dirs: string[] = [];
