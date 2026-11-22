@@ -1,0 +1,55 @@
+name: APM
+on:
+  push:
+    branches:
+      - master
+jobs:
+  test:
+    name: APM ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: git config --global user.name "Github Actions"
+      - run: git config --global user.email "actions@users.noreply.github.com"
+      - name: Install APM (Linux and macOS)
+        if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL https://aka.ms/apm-unix | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install APM (Windows)
+        if: runner.os == 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          irm https://aka.ms/apm-windows | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:LOCALAPPDATA\Programs\apm\current"
+      - run: apm --version
+      - id: deps
+        run: npm ci
+      - run: npm run test:apm
+        env:
+          TEST_APM_STRICT: "true"
+      # The same live suite again, writing what this APM did on this OS to test/fixtures/apm/ (the run above compares against
+      # the committed recordings; record mode skips that comparison). Download the artifact to review and commit a recording.
+      - name: Record this OS
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run test:apm
+        env:
+          TEST_APM_STRICT: "true"
+          TEST_APM_RECORD: "true"
+          TEST_APM_RECORD_ENVIRONMENT: "GitHub Actions ${{ matrix.os }}, latest APM release"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        with:
+          name: apm-recording-${{ matrix.os }}
+          path: test/fixtures/apm/
+          if-no-files-found: error

@@ -1,0 +1,1 @@
+ignores: ["agent-plugin-lifecycle", "node-version-use", "ts-dev-stack"]

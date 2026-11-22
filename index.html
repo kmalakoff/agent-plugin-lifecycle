@@ -1,0 +1,114 @@
+<!DOCTYPE html><html class="default" lang="en" data-base="./"><head><meta charset="utf-8"/><meta http-equiv="x-ua-compatible" content="IE=edge"/><title>agent-plugin-lifecycle</title><meta name="description" content="Documentation for agent-plugin-lifecycle"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="stylesheet" href="assets/style.css"/><link rel="stylesheet" href="assets/highlight.css"/><script defer src="assets/main.js"></script><script async src="assets/icons.js" id="tsd-icons-script"></script><script async src="assets/search.js" id="tsd-search-script"></script><script async src="assets/navigation.js" id="tsd-nav-script"></script></head><body><script>document.documentElement.dataset.theme = localStorage.getItem("tsd-theme") || "os";document.body.style.display="none";setTimeout(() => window.app?app.showPage():document.body.style.removeProperty("display"),500)</script><header class="tsd-page-toolbar">
+<div class="tsd-toolbar-contents container"><a href="index.html" class="title">agent-plugin-lifecycle</a>
+<div id="tsd-toolbar-links"></div><button id="tsd-search-trigger" class="tsd-widget" aria-label="Search"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><use href="assets/icons.svg#icon-search"></use></svg></button><dialog id="tsd-search" aria-label="Search"><input role="combobox" id="tsd-search-input" aria-controls="tsd-search-results" aria-autocomplete="list" aria-expanded="true" autocapitalize="off" autocomplete="off" placeholder="Search the docs" maxLength="100"/>
+<ul role="listbox" id="tsd-search-results"></ul>
+<div id="tsd-search-status" aria-live="polite" aria-atomic="true">
+<div>Preparing search index...</div></div></dialog><a href="#" class="tsd-widget menu" id="tsd-toolbar-menu-trigger" data-toggle="menu" aria-label="Menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><use href="assets/icons.svg#icon-menu"></use></svg></a></div></header>
+<div class="container container-main">
+<div class="col-content">
+<div class="tsd-page-title">
+<h1>agent-plugin-lifecycle</h1></div>
+<div class="tsd-panel tsd-typography"><h1 id="agent-plugin-lifecycle" class="tsd-anchor-link">agent-plugin-lifecycle<a href="#agent-plugin-lifecycle" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h1>
+<p>Run your own setup and cleanup commands when Agent Package Manager (APM) installs, updates or removes an agent plugin. APM copies a plugin into each agent harness but never runs the plugin's own code, so a plugin that needs <code>npm ci</code>, <code>uv sync</code> or any other setup arrives without it. <code>agent-plugin-lifecycle</code> is the hook APM calls after each event: it finds every copy APM deployed, runs the commands you configured for that plugin in each copy, and records whether they succeeded. Commands come only from your own config file, never from downloaded plugin files.</p>
+<p>Requires Node.js 22.18 or newer and APM.</p>
+<h2 id="install" class="tsd-anchor-link">Install<a href="#install" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<pre><code class="sh"><span class="hl-0">npm</span><span class="hl-1"> </span><span class="hl-2">install</span><span class="hl-1"> </span><span class="hl-3">-g</span><span class="hl-1"> </span><span class="hl-2">agent-plugin-lifecycle</span><br/><span class="hl-0">agent-plugin-lifecycle</span><span class="hl-1"> </span><span class="hl-3">--help</span>
+</code><button type="button">Copy</button></pre>
+
+<h2 id="register-the-hook-with-apm" class="tsd-anchor-link">Register the hook with APM<a href="#register-the-hook-with-apm" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<p>Add the dispatcher to your user <code>~/.apm/apm.yml</code> for each event you want:</p>
+<pre><code class="yaml"><span class="hl-4">lifecycle</span><span class="hl-1">:</span><br/><span class="hl-1">  </span><span class="hl-4">post-install</span><span class="hl-1">:</span><br/><span class="hl-1">    - </span><span class="hl-4">run</span><span class="hl-1">: </span><span class="hl-5">agent-plugin-lifecycle run</span><br/><span class="hl-1">  </span><span class="hl-4">post-update</span><span class="hl-1">:</span><br/><span class="hl-1">    - </span><span class="hl-4">run</span><span class="hl-1">: </span><span class="hl-5">agent-plugin-lifecycle run</span><br/><span class="hl-1">  </span><span class="hl-4">post-uninstall</span><span class="hl-1">:</span><br/><span class="hl-1">    - </span><span class="hl-4">run</span><span class="hl-1">: </span><span class="hl-5">agent-plugin-lifecycle run</span>
+</code><button type="button">Copy</button></pre>
+
+<p>It handles user-scope events; project-scope events are skipped.</p>
+<h2 id="configure-plugins" class="tsd-anchor-link">Configure plugins<a href="#configure-plugins" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<p>Put your commands in <code>~/.config/agent-plugin-lifecycle/config.json</code>:</p>
+<pre><code class="json"><span class="hl-1">{</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;version&quot;</span><span class="hl-1">: </span><span class="hl-7">1</span><span class="hl-1">,</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;plugins&quot;</span><span class="hl-1">: [</span><br/><span class="hl-1">    {</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;source&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;git@bitbucket.org:team/plugins.git&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;path&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;plugins/example&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;post-install&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;npm ci --prefix server --no-bin-links&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;post-uninstall&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;node .config/agent-plugin-lifecycle/cleanup-example.js&quot;</span><br/><span class="hl-1">    },</span><br/><span class="hl-1">    {</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;source&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;git@bitbucket.org:team/plugins.git&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;path&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;plugins/example&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;skill&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;hello-node&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">      </span><span class="hl-6">&quot;post-install&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;npm ci --no-bin-links&quot;</span><br/><span class="hl-1">    }</span><br/><span class="hl-1">  ]</span><br/><span class="hl-1">}</span>
+</code><button type="button">Copy</button></pre>
+
+<p>Each record names one plugin or skill:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source</code></td>
+<td>Git URL, or the absolute local path written in the plugin's <code>apm.yml</code> dependency</td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td>Relative folder of the plugin inside the repository; default <code>.</code></td>
+</tr>
+<tr>
+<td><code>skill</code></td>
+<td>Run in each deployed copy of this skill instead of the whole plugin</td>
+</tr>
+<tr>
+<td><code>post-install</code></td>
+<td>Runs in each deployed copy after install</td>
+</tr>
+<tr>
+<td><code>post-update</code></td>
+<td>Runs in each deployed copy after update; defaults to <code>post-install</code></td>
+</tr>
+<tr>
+<td><code>post-uninstall</code></td>
+<td>Runs once after APM removes the plugin</td>
+</tr>
+</tbody>
+</table>
+<p>A full example is in <a href="media/config.example.json">config/config.example.json</a>.</p>
+<p>Then run <code>apm install</code> or <code>apm update</code> as usual; your commands run inside it.</p>
+<h2 id="check-the-result" class="tsd-anchor-link">Check the result<a href="#check-the-result" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<pre><code class="sh"><span class="hl-0">agent-plugin-lifecycle</span><span class="hl-1"> </span><span class="hl-2">check</span>
+</code><button type="button">Copy</button></pre>
+
+<p>Prints <code>ok</code> or <code>missing</code> for every deployed copy of every installed, configured record, and exits 1 if any copy is <code>missing</code> (the current command never succeeded there). APM reports a failing hook as a warning and still finishes, so use <code>check</code> wherever a script needs a definite answer. To fix a record, correct its command and run <code>apm install</code> again.</p>
+<h2 id="rules-for-commands" class="tsd-anchor-link">Rules for commands<a href="#rules-for-commands" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<ul>
+<li>A command is a string run through the platform shell (like an npm script), exactly as written; nothing from APM or the plugin is substituted into it. Quoting and syntax follow that machine's shell.</li>
+<li>Make each command safe to repeat: it runs on every install and update.</li>
+<li>For npm inside a Claude Code plugin copy use <code>--no-bin-links</code> (or <code>npm_config_bin_links=false</code>). APM refuses later installs when that copy contains a symlink, and <code>node_modules/.bin</code> would add one.</li>
+<li>A local <code>source</code> is the absolute path exactly as written in <code>apm.yml</code>.</li>
+<li><code>post-uninstall</code> runs from your home folder after the plugin's files are gone, so it can only use files you keep outside the plugin.</li>
+</ul>
+<h2 id="agent-skill" class="tsd-anchor-link">Agent skill<a href="#agent-skill" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<pre><code class="sh"><span class="hl-0">npx</span><span class="hl-1"> </span><span class="hl-2">skills</span><span class="hl-1"> </span><span class="hl-2">add</span><span class="hl-1"> </span><span class="hl-2">kmalakoff/agent-plugin-lifecycle</span><span class="hl-1">   </span><span class="hl-8"># -g for global, -a &lt;agent&gt; to target</span>
+</code><button type="button">Copy</button></pre>
+
+<p>The skill teaches an agent to set up this hook, write the config for a plugin and check the result. It installs from Git through this command, separately from the npm package.</p>
+<h2 id="license" class="tsd-anchor-link">License<a href="#license" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<p>MIT</p>
+</div></div>
+<div class="col-sidebar">
+<div class="page-menu">
+<div class="tsd-navigation settings">
+<details class="tsd-accordion"><summary class="tsd-accordion-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="assets/icons.svg#icon-chevronDown"></use></svg>
+<h3>Settings</h3></summary>
+<div class="tsd-accordion-details">
+<div class="tsd-filter-visibility"><span class="settings-label">Member Visibility</span>
+<ul id="tsd-filter-options">
+<li class="tsd-filter-item"><label class="tsd-filter-input"><input type="checkbox" id="tsd-filter-protected" name="protected"/><svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect class="tsd-checkbox-background" width="30" height="30" x="1" y="1" rx="6" fill="none"></rect><path class="tsd-checkbox-checkmark" d="M8.35422 16.8214L13.2143 21.75L24.6458 10.25" stroke="none" stroke-width="3.5" stroke-linejoin="round" fill="none"></path></svg><span>Protected</span></label></li>
+<li class="tsd-filter-item"><label class="tsd-filter-input"><input type="checkbox" id="tsd-filter-inherited" name="inherited" checked/><svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect class="tsd-checkbox-background" width="30" height="30" x="1" y="1" rx="6" fill="none"></rect><path class="tsd-checkbox-checkmark" d="M8.35422 16.8214L13.2143 21.75L24.6458 10.25" stroke="none" stroke-width="3.5" stroke-linejoin="round" fill="none"></path></svg><span>Inherited</span></label></li></ul></div>
+<div class="tsd-theme-toggle"><label class="settings-label" for="tsd-theme">Theme</label><select id="tsd-theme"><option value="os">OS</option><option value="light">Light</option><option value="dark">Dark</option></select></div></div></details></div>
+<details open class="tsd-accordion tsd-page-navigation"><summary class="tsd-accordion-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="assets/icons.svg#icon-chevronDown"></use></svg>
+<h3>On This Page</h3></summary>
+<div class="tsd-accordion-details"><a href="#agent-plugin-lifecycle"><span>agent-<wbr/>plugin-<wbr/>lifecycle</span></a>
+<ul>
+<li><a href="#install"><span>Install</span></a></li>
+<li><a href="#register-the-hook-with-apm"><span>Register the hook with <wbr/>APM</span></a></li>
+<li><a href="#configure-plugins"><span>Configure plugins</span></a></li>
+<li><a href="#check-the-result"><span>Check the result</span></a></li>
+<li><a href="#rules-for-commands"><span>Rules for commands</span></a></li>
+<li><a href="#agent-skill"><span>Agent skill</span></a></li>
+<li><a href="#license"><span>License</span></a></li></ul></div></details></div>
+<div class="site-menu">
+<nav class="tsd-navigation"><a href="modules.html">agent-plugin-lifecycle</a>
+<ul class="tsd-small-nested-navigation" id="tsd-nav-container">
+<li>Loading...</li></ul></nav></div></div></div><footer>
+<p class="tsd-generator">Generated using <a href="https://typedoc.org/" target="_blank">TypeDoc</a></p></footer>
+<div class="overlay"></div></body></html>

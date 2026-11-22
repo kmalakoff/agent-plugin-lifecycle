@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "source": "git@bitbucket.org:team/plugins.git",
+      "path": "plugins/example",
+      "post-install": "npm ci --prefix server --no-bin-links",
+      "post-update": "npm ci --prefix server --no-bin-links",
+      "post-uninstall": "node .config/agent-plugin-lifecycle/cleanup-example.js"
+    },
+    {
+      "source": "git@bitbucket.org:team/plugins.git",
+      "path": "plugins/example",
+      "skill": "hello-node",
+      "post-install": "npm ci --no-bin-links"
+    },
+    {
+      "source": "/absolute/path/to/local-plugin",
+      "post-install": "npm ci --no-bin-links"
+    }
+  ]
+}
