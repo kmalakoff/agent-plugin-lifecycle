@@ -1,6 +1,6 @@
 {
   "name": "agent-plugin-lifecycle",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Run approved lifecycle commands for agent plugins installed by Agent Package Manager (APM)",
   "keywords": [
     "apm",
