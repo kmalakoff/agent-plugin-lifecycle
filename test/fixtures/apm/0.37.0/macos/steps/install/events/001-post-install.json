@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "event": "post-install",
+  "packages": [
+    {
+      "name": "_local/lifecycle-demo",
+      "reference": null
+    },
+    {
+      "name": "_local/lifecycle-demo-dep",
+      "reference": null
+    }
+  ],
+  "scope": "user",
+  "timestamp": "2026-11-22T04:46:04Z",
+  "cli_version": "0.37.0",
+  "working_directory": "<HOME>/.apm"
+}

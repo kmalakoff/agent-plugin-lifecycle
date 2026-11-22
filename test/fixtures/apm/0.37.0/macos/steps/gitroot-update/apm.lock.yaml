@@ -1,0 +1,13 @@
+lockfile_version: "4"
+apm_version: 0.37.0
+manifest_targets: []
+dependencies:
+  - repo_url: kmalakoff/agent-plugin-lifecycle
+    name: lifecycle-demo
+    host: github.com
+    resolved_commit: a6829cf567d46b158d19edcaa0c1e82aaced3904
+    resolved_ref: a6829cf567d46b158d19edcaa0c1e82aaced3904
+    version: 1.0.0
+    package_type: agent_plugin
+    content_hash: sha256:775212901e7dc37c4520d4771624cc0be7062be3974bf3dc4e377d4eeae03dc1
+deployments: []

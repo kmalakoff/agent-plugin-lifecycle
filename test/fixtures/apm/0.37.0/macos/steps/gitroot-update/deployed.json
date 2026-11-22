@@ -1,0 +1,15 @@
+[
+  ".apm-local/.apm-lifecycle.lock",
+  ".apm/.apm-lifecycle.lock",
+  ".apm/apm.lock.yaml",
+  ".apm/apm.yml",
+  ".apm/apm_modules/.github/plugin/apm-registration.json",
+  ".apm/apm_modules/.github/plugin/marketplace.json",
+  ".apm/apm_modules/kmalakoff/agent-plugin-lifecycle/.apm-pin",
+  ".apm/apm_modules/kmalakoff/agent-plugin-lifecycle/plugin.json",
+  ".apm/apm_modules/kmalakoff/agent-plugin-lifecycle/skills/greet/SKILL.md",
+  ".apm/apm_modules/kmalakoff/agent-plugin-lifecycle/skills/greet/setup.updated",
+  ".apm/apm_modules/kmalakoff/agent-plugin-lifecycle/updated.marker",
+  ".copilot/settings.json",
+  ".local/state/gh/device-id"
+]

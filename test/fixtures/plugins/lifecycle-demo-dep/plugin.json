@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "lifecycle-demo-dep",
+  "version": "1.0.0",
+  "description": "Dependency of the lifecycle-demo test plugin."
+}

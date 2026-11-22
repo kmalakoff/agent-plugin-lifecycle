@@ -1,0 +1,19 @@
+lockfile_version: "4"
+apm_version: 0.37.0
+manifest_targets: []
+dependencies:
+  - repo_url: _local/lifecycle-demo
+    name: lifecycle-demo
+    version: 1.0.0
+    package_type: agent_plugin
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo
+    content_hash: sha256:da04a81a5db59c68ad0dd26868d0547ea5c1df6fecdffe917037abd2a7722c1a
+  - repo_url: _local/lifecycle-demo-dep
+    name: lifecycle-demo-dep
+    version: 1.0.0
+    package_type: agent_plugin
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:6e83dfb83ef04d2f190b2b9269f26481e47f30f42dca15d602190d2050a4adcf
+deployments: []

@@ -1,0 +1,45 @@
+{
+  "kind": "recording of real APM runs; a change detector for the APM lock and event schema, not a correctness oracle",
+  "apm_version": "0.37.0",
+  "apm_commit": "c0c6e25",
+  "os": "linux",
+  "platform": "linux",
+  "arch": "arm64",
+  "node": "v22.23.5",
+  "recorded_at": "2026-11-22T04:47:21.982Z",
+  "environment": "docker node:22-bookworm",
+  "plugin_fixtures_sha256": "170f27e46bdb7cf8a6e5bbfb74ca850e7839d5094ae1b8e831d8be8bb549da57",
+  "git_root_source": {
+    "url": "https://github.com/kmalakoff/agent-plugin-lifecycle",
+    "path": ".",
+    "first": "b4d602c158f866a09e1068befdcb197b68b47320",
+    "second": "a6829cf567d46b158d19edcaa0c1e82aaced3904"
+  },
+  "git_source": {
+    "url": "https://github.com/kmalakoff/agent-plugin-lifecycle",
+    "path": "lifecycle-demo",
+    "first": "440b061092fe164a82750e901fc49bcd77c858e6",
+    "second": "bbf4b3c35e32cb68711e44df0f9f430da314d130"
+  },
+  "commands": [
+    "apm install -g --target copilot",
+    "agent-plugin-lifecycle check",
+    "apm update -g --yes",
+    "agent-plugin-lifecycle check",
+    "apm install -g --target copilot",
+    "agent-plugin-lifecycle check",
+    "apm uninstall -g _local/lifecycle-demo",
+    "agent-plugin-lifecycle check",
+    "apm install -g --target copilot",
+    "agent-plugin-lifecycle check",
+    "apm update -g --yes",
+    "agent-plugin-lifecycle check",
+    "apm uninstall -g kmalakoff/agent-plugin-lifecycle/lifecycle-demo",
+    "apm install -g --target copilot",
+    "agent-plugin-lifecycle check",
+    "apm update -g --yes",
+    "agent-plugin-lifecycle check",
+    "apm uninstall -g kmalakoff/agent-plugin-lifecycle"
+  ],
+  "paths": "absolute paths are stored as <HOME> (the recorded account home) and <PLUGINS> (the plugin source copy)"
+}

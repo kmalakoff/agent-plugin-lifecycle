@@ -1,0 +1,13 @@
+[
+  ".apm-local/.apm-lifecycle.lock",
+  ".apm/.apm-lifecycle.lock",
+  ".apm/apm.lock.yaml",
+  ".apm/apm.yml",
+  ".apm/apm_modules/.github/plugin/apm-registration.json",
+  ".apm/apm_modules/.github/plugin/marketplace.json",
+  ".apm/apm_modules/_local/lifecycle-demo-dep/plugin.json",
+  ".apm/apm_modules/_local/lifecycle-demo-dep/skills/shout/SKILL.md",
+  ".apm/apm_modules/_local/lifecycle-demo/plugin.json",
+  ".apm/apm_modules/_local/lifecycle-demo/skills/greet/SKILL.md",
+  ".copilot/settings.json"
+]

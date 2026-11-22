@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "event": "post-install",
+  "packages": [
+    {
+      "name": "kmalakoff/agent-plugin-lifecycle",
+      "reference": "440b061092fe164a82750e901fc49bcd77c858e6"
+    }
+  ],
+  "scope": "user",
+  "timestamp": "2026-11-22T04:47:15Z",
+  "cli_version": "0.37.0",
+  "working_directory": "<HOME>/.apm"
+}
