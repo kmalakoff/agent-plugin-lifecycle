@@ -61,8 +61,13 @@
 </tr>
 </tbody>
 </table>
+<p>A repository of plain skills (<code>skills/&lt;name&gt;/SKILL.md</code>, no plugin manifest) works the same way: select the skills on its <code>apm.yml</code> entry with <code>skills: [name]</code> (what <code>apm install owner/repo --skill name</code> writes), and give each one a record with <code>source</code> and <code>skill</code>, no <code>path</code>:</p>
+<pre><code class="json"><span class="hl-1">{ </span><span class="hl-6">&quot;source&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;https://github.com/team/skills.git&quot;</span><span class="hl-1">, </span><span class="hl-6">&quot;skill&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;report&quot;</span><span class="hl-1">, </span><span class="hl-6">&quot;post-install&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;npm ci --no-bin-links&quot;</span><span class="hl-1"> }</span>
+</code><button type="button">Copy</button></pre>
+
 <p>A full example is in <a href="media/config.example.json">config/config.example.json</a>.</p>
 <p>Then run <code>apm install</code> or <code>apm update</code> as usual; your commands run inside it.</p>
+<p>APM fires <code>post-update</code> when <code>apm update</code> moves a pinned source to a newer release tag. A source pinned to a commit in a repository without release tags does not move on <code>apm update</code>: change the pin and run <code>apm install --update</code>, which fires <code>post-install</code>. Either way your commands run, because <code>post-update</code> defaults to <code>post-install</code>.</p>
 <h2 id="check-the-result" class="tsd-anchor-link">Check the result<a href="#check-the-result" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <pre><code class="sh"><span class="hl-0">agent-plugin-lifecycle</span><span class="hl-1"> </span><span class="hl-2">check</span>
 </code><button type="button">Copy</button></pre>
