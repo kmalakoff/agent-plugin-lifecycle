@@ -2,96 +2,71 @@
 
 ## A plugin with an MCP server and a Node skill
 
-The plugin `plugins/notes` in `git@github.com:team/plugins.git` has an MCP server in `server/` with its own `package.json`, and a skill `notes-search` with a script that needs dependencies.
+The plugin `plugins/notes` has an MCP server in `server/` with its own `package.json`, and a skill `notes-search` whose script needs dependencies. Two files in the plugin's repository:
 
-`~/.apm/apm.yml`:
-
-```yaml
-name: my-machine
-version: 0.0.0
-dependencies:
-  apm:
-    - git: git@github.com:team/plugins.git
-      path: plugins/notes
-      ref: v1.4.0
-lifecycle:
-  post-install:
-    - run: agent-plugin-lifecycle run
-      timeoutSec: 300
-  post-update:
-    - run: agent-plugin-lifecycle run
-      timeoutSec: 300
-  post-uninstall:
-    - run: agent-plugin-lifecycle run
-      timeoutSec: 300
-```
-
-After `apm install -g`, `agent-plugin-lifecycle check` prints `ok` for each copy.
-
-`~/.config/agent-plugin-lifecycle/config.json`:
+`plugins/notes/apl.json` (runs in the plugin's native copy):
 
 ```json
-{
-  "version": 1,
-  "plugins": [
-    {
-      "source": "git@github.com:team/plugins.git",
-      "path": "plugins/notes",
-      "post-install": "npm ci --prefix server --no-bin-links"
-    },
-    {
-      "source": "git@github.com:team/plugins.git",
-      "path": "plugins/notes",
-      "skill": "notes-search",
-      "post-install": "npm ci --no-bin-links"
-    }
-  ]
-}
+{ "scripts": { "install": "npm ci --prefix server --no-bin-links" } }
 ```
 
-The first record installs the server's dependencies in each full plugin copy a harness reads, so the server starts in every harness that registered it. The second installs the skill's dependencies in each copy of `notes-search`.
+`plugins/notes/skills/notes-search/apl.json` (runs in each copy of the skill):
+
+```json
+{ "scripts": { "install": "npm ci --no-bin-links" } }
+```
+
+The owner's first install, from the project root:
+
+```sh
+apm install && apl install
+```
+
+`apl install` asks twice, once for `github.com/team/plugins/plugins/notes` and once for `github.com/team/plugins/plugins/notes:skills/notes-search`, then prints a `ran` line per copy. In another project that uses the same plugin, `apl install` asks again: an approval belongs to the project it was given in.
 
 ## A Python skill
 
-```json
-{
-  "source": "git@github.com:team/plugins.git",
-  "path": "plugins/reports",
-  "skill": "monthly-report",
-  "post-install": "uv sync --frozen"
-}
-```
-
-## A repository of plain skills
-
-The repository `https://github.com/team/skills.git` holds `skills/<name>/SKILL.md` folders and no plugin manifest. Install one of its skills, `report`:
-
-```yaml
-dependencies:
-  apm:
-    - git: https://github.com/team/skills.git
-      skills:
-        - report
-```
+`skills/monthly-report/apl.json`:
 
 ```json
-{
-  "source": "https://github.com/team/skills.git",
-  "skill": "report",
-  "post-install": "npm ci --no-bin-links"
-}
+{ "scripts": { "install": "uv sync --frozen" } }
 ```
 
-## A local plugin with cleanup
+## A setup that needs more than one command
 
-A plugin kept in a local folder is declared in `apm.yml` by its absolute path, and the record uses the same path:
+Keep the logic in a script beside `apl.json`, so it behaves the same under `sh` and `cmd.exe`:
 
 ```json
-{
-  "source": "/opt/plugins/backup",
-  "post-install": "npm ci --no-bin-links",
-  "post-uninstall": "node .config/agent-plugin-lifecycle/backup-cleanup.js"
-}
+{ "scripts": { "install": "node setup.js" } }
 ```
 
-`backup-cleanup.js` lives outside the plugin, so it still exists when the cleanup runs.
+## A skill installed with the skills CLI
+
+`npx skills add team/skills --skill report -a claude-code -a codex` wrote the skill, `apl.json` included, to `.agents/skills/report` and linked `.claude/skills/report` to it. Name both folders; the link resolves to the same folder, so `apl install` asks once and prints one line, and the folder stays approved from whatever folder you name it:
+
+```sh
+apl install .agents/skills/report .claude/skills/report
+apl status .agents/skills/report .claude/skills/report
+```
+
+After `npx skills update`, run the same `apl install` again: the skills CLI has no hook, and a named folder's script runs every time it is named.
+
+## CI
+
+A job that installs a project's APM dependencies and needs their setup to have run:
+
+```sh
+apm install && apl install -y && apl status
+```
+
+`-y` approves every script in that job's fresh home; the last command exits 1 if any copy is not `ok`.
+
+## After `apm uninstall`
+
+```console
+$ apl status -g
+ok github.com/team/skills:skills/report /Users/me/.agents/skills/report
+left /Users/me/.agents/plugins/notes
+```
+
+APM kept `/Users/me/.agents/plugins/notes` because the script's `node_modules` are files APM did not write. Delete the folder; `apl status` then no longer lists it.

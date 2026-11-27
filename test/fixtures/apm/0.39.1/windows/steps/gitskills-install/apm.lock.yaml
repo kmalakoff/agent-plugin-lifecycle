@@ -1,0 +1,38 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: vercel-labs/skills
+    name: skills
+    host: github.com
+    resolved_commit: cca706a50522ffade404618e23a2009f07c64828
+    resolved_ref: cca706a50522ffade404618e23a2009f07c64828
+    version: unknown
+    package_type: skill_bundle
+    deployed_files:
+      - .agents/skills/find-skills
+      - .agents/skills/find-skills/SKILL.md
+    deployed_file_hashes:
+      .agents/skills/find-skills/SKILL.md: sha256:54b44dc9539df865fbb060f62fb062e8232e765852a0cf14c38301fe0c1eb264
+    content_hash: sha256:3ece5bff7aca7d68957c9429a53cc718fb7d31153161f4dae7b5a4858468792c
+    skill_subset:
+      - find-skills
+deployments:
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/find-skills
+    runtime: null
+    scope: user
+    owners:
+      - vercel-labs/skills
+    active_owner: vercel-labs/skills
+    content_hash: null
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/find-skills/SKILL.md
+    runtime: null
+    scope: user
+    owners:
+      - vercel-labs/skills
+    active_owner: vercel-labs/skills
+    content_hash: sha256:54b44dc9539df865fbb060f62fb062e8232e765852a0cf14c38301fe0c1eb264

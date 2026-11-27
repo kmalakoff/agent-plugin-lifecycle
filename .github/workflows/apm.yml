@@ -38,6 +38,11 @@ jobs:
       - run: npm run test:apm
         env:
           TEST_APM_STRICT: "true"
+      # The skills CLI, the other installer the README documents: `npx skills add` from the npm registry and GitHub.
+      - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run test:skills
+        env:
+          TEST_SKILLS_STRICT: "true"
       # The same live suite again, writing what this APM did on this OS to test/fixtures/apm/ (the run above compares against
       # the committed recordings; record mode skips that comparison). Download the artifact to review and commit a recording.
       - name: Record this OS

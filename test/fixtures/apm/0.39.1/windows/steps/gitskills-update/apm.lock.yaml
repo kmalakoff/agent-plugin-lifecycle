@@ -1,0 +1,66 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: vercel-labs/skills
+    name: skills
+    host: github.com
+    resolved_commit: e7fd0e9e52f029fe87729d8185cb8caf7049f678
+    resolved_ref: e7fd0e9e52f029fe87729d8185cb8caf7049f678
+    version: 0.0.0
+    package_type: skill_bundle
+    deployed_files:
+      - .agents/skills/find-skills
+      - .agents/skills/find-skills/LICENSE
+      - .agents/skills/find-skills/SKILL.md
+    deployed_file_hashes:
+      .agents/skills/find-skills/LICENSE: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+      .agents/skills/find-skills/SKILL.md: sha256:c00eeea0e13e74fe4a9d84ba0a8542205a1b736d65f13134fe1a6647eb14976f
+    content_hash: sha256:4c630f12bf7fc6a5bad39cf786484db805ca0ef414c3a9622d1ac0334fff02c3
+    skill_subset:
+      - find-skills
+    resolved_tag: v1.9.1
+    carried_licenses:
+      - path: .automations/pr-labeling/skills/pr-labeling/LICENSE
+        source: LICENSE
+        hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+      - path: .automations/triage/skills/triage/LICENSE
+        source: LICENSE
+        hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+      - path: .vc/automations/workflows/pr-labeling/skills/pr-labeling/LICENSE
+        source: LICENSE
+        hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+      - path: .vc/automations/workflows/triage/skills/triage/LICENSE
+        source: LICENSE
+        hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+      - path: skills/find-skills/LICENSE
+        source: LICENSE
+        hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+deployments:
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/find-skills
+    runtime: null
+    scope: user
+    owners:
+      - vercel-labs/skills
+    active_owner: vercel-labs/skills
+    content_hash: null
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/find-skills/LICENSE
+    runtime: null
+    scope: user
+    owners:
+      - vercel-labs/skills
+    active_owner: vercel-labs/skills
+    content_hash: sha256:661142e53c313d2bb5e1b055f5c0a39001450ff1b5e27b89dc4bc7de9a6352ca
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/find-skills/SKILL.md
+    runtime: null
+    scope: user
+    owners:
+      - vercel-labs/skills
+    active_owner: vercel-labs/skills
+    content_hash: sha256:c00eeea0e13e74fe4a9d84ba0a8542205a1b736d65f13134fe1a6647eb14976f

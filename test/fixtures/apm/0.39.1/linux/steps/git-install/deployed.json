@@ -1,0 +1,23 @@
+[
+  ".apm-local/.apm-lifecycle.lock",
+  ".apm-local/.gitignore",
+  ".apm-local/installation",
+  ".apm/.apm-lifecycle.lock",
+  ".apm/apm.lock.yaml",
+  ".apm/apm.yml",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.apm-pin",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.apm/.plugin-skill-sources.json",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.apm/prompts/clean_gone.prompt.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.apm/prompts/commit-push-pr.prompt.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.apm/prompts/commit.prompt.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/.claude-plugin/plugin.json",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/README.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/apm.yml",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/commands/clean_gone.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/commands/commit-push-pr.md",
+  ".apm/apm_modules/anthropics/claude-plugins-official/plugins/commit-commands/commands/commit.md",
+  ".apm/deployment-receipts/4384b4ac7d839317d2fe82b77d3c137cac8aa6bff224bd560cf504d97c610485.json",
+  ".copilot/prompts/clean_gone.prompt.md",
+  ".copilot/prompts/commit-push-pr.prompt.md",
+  ".copilot/prompts/commit.prompt.md"
+]

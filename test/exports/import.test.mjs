@@ -1,9 +1,9 @@
-import assert from 'node:assert/strict';
-import { parseConfig, runLifecycle } from 'agent-plugin-lifecycle';
+import { install, status } from 'agent-plugin-lifecycle';
+import assert from 'assert';
 
 describe('ESM package export', () => {
-  it('loads the public parser and runner', () => {
-    assert.equal(typeof parseConfig, 'function');
-    assert.equal(typeof runLifecycle, 'function');
+  it('loads install and status', () => {
+    assert.strictEqual(typeof install, 'function');
+    assert.strictEqual(typeof status, 'function');
   });
 });

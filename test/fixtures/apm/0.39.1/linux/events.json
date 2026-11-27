@@ -1,0 +1,21 @@
+{
+  "claudedir-home-install": ["post-install"],
+  "claudedir-outside-install": ["post-install"],
+  "git-install": ["post-install"],
+  "git-uninstall": ["post-uninstall"],
+  "git-update": ["post-install"],
+  "gitroot-install": ["post-install"],
+  "gitroot-uninstall": ["post-uninstall"],
+  "gitroot-update": ["post-install", "post-update"],
+  "gitskills-install": ["post-install"],
+  "gitskills-uninstall": ["post-uninstall"],
+  "gitskills-update": ["post-install", "post-update"],
+  "install": ["post-install"],
+  "project-install": ["post-install"],
+  "project-reinstall": ["post-install"],
+  "project-uninstall": ["post-uninstall"],
+  "project-update": [],
+  "reinstall": ["post-install"],
+  "uninstall": ["post-uninstall"],
+  "update": []
+}

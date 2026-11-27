@@ -1,14 +1,24 @@
 {
   "name": "agent-plugin-lifecycle",
   "version": "0.2.0",
-  "description": "Run approved lifecycle commands for agent plugins installed by Agent Package Manager (APM)",
+  "description": "Run the install scripts that agent plugins and skills ship in apl.json, after you approve them: for Agent Package Manager (APM), npx skills and any other installer",
   "keywords": [
     "apm",
     "agent",
-    "package",
-    "manager",
+    "skills",
     "plugin",
-    "lifecycle"
+    "install",
+    "scripts",
+    "lifecycle",
+    "approval",
+    "agent-package-manager",
+    "agent-skills",
+    "agent-plugins",
+    "npx-skills",
+    "install-scripts",
+    "postinstall",
+    "allow-scripts",
+    "apl"
   ],
   "repository": {
     "type": "git",
@@ -28,11 +38,11 @@
   "source": "src/index.ts",
   "types": "dist/cjs/index.d.ts",
   "bin": {
-    "agent-plugin-lifecycle": "bin/cli.js"
+    "agent-plugin-lifecycle": "bin/cli.js",
+    "apl": "bin/cli.js"
   },
   "files": [
-    "dist",
-    "config"
+    "dist"
   ],
   "scripts": {
     "build": "tsds build",
@@ -42,17 +52,23 @@
     "test": "tsds test:node --no-timeouts",
     "test:apm": "tsds test:node --no-timeouts test/integration/apm-live.test.ts",
     "test:engines": "nvu engines tsds test:node --no-timeouts",
+    "test:skills": "tsds test:node --no-timeouts test/integration/skills-cli.test.ts",
     "version": "tsds version"
   },
   "dependencies": {
-    "cross-spawn-cb": "^3.3.1",
+    "is-path-inside": "^4.0.0",
+    "jsesc": "^3.1.0",
     "proper-lockfile": "^4.1.2",
+    "write-file-atomic": "^7.0.1",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@types/jsesc": "^3.0.3",
     "@types/mocha": "*",
     "@types/node": "^22",
     "@types/proper-lockfile": "^4.1.4",
+    "@types/write-file-atomic": "^4.0.3",
+    "cross-spawn-cb": "^3.3.1",
     "fs-remove-compat": "^1.1.1",
     "node-version-use": "*",
     "ts-dev-stack": "*",

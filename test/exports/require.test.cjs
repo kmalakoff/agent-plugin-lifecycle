@@ -1,9 +1,9 @@
-const assert = require('node:assert/strict');
-const { parseConfig, runLifecycle } = require('agent-plugin-lifecycle');
+const assert = require('assert');
+const { install, status } = require('agent-plugin-lifecycle');
 
 describe('CommonJS package export', () => {
-  it('loads the public parser and runner', () => {
-    assert.equal(typeof parseConfig, 'function');
-    assert.equal(typeof runLifecycle, 'function');
+  it('loads install and status', () => {
+    assert.strictEqual(typeof install, 'function');
+    assert.strictEqual(typeof status, 'function');
   });
 });

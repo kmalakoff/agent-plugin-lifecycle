@@ -1,2 +1,9 @@
 #!/usr/bin/env node
-import '../dist/esm/cli.js';
+
+// biome-ignore lint/security/noGlobalEval: dual esm and cjs
+if (typeof require === 'undefined') eval("import('../dist/esm/cli.js').then((cli) => cli.default(process.argv.slice(2), 'apl')).catch((err) => { console.error(err); process.exit(2); });");
+else
+  require('../dist/cjs/cli.js')(process.argv.slice(2), 'apl').catch((err) => {
+    console.error(err);
+    process.exit(2);
+  });

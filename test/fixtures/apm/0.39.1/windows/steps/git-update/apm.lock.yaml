@@ -1,0 +1,50 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: anthropics/claude-plugins-official
+    name: commit-commands
+    host: github.com
+    resolved_commit: d5c15b861cd23e3102215c26020368ad5134dc47
+    resolved_ref: d5c15b861cd23e3102215c26020368ad5134dc47
+    version: d5c15b8
+    virtual_path: plugins/commit-commands
+    is_virtual: true
+    package_type: marketplace_plugin
+    deployed_files:
+      - .copilot/prompts/clean_gone.prompt.md
+      - .copilot/prompts/commit-push-pr.prompt.md
+      - .copilot/prompts/commit.prompt.md
+    deployed_file_hashes:
+      .copilot/prompts/clean_gone.prompt.md: sha256:4f07fa2ccf4f81a69c6455bdc563b53a3d3b20aea6e4e82337c52b172ee02344
+      .copilot/prompts/commit-push-pr.prompt.md: sha256:3bc3d171939149cbbef141cbced553dce6ba6f97dac4a764f4ef1e055c35064d
+      .copilot/prompts/commit.prompt.md: sha256:d1acbc2bf0c50164f48d6bda872de6a343cd9390954ce903c3431c3119e7f8c4
+    content_hash: sha256:891eae889bc167320b833da6b20e1ca92f7b9edc4f9c68a6beaa85fbef61ab65
+deployments:
+  - kind: project-relative
+    target: copilot
+    value: .copilot/prompts/clean_gone.prompt.md
+    runtime: null
+    scope: user
+    owners:
+      - anthropics/claude-plugins-official/plugins/commit-commands
+    active_owner: anthropics/claude-plugins-official/plugins/commit-commands
+    content_hash: sha256:4f07fa2ccf4f81a69c6455bdc563b53a3d3b20aea6e4e82337c52b172ee02344
+  - kind: project-relative
+    target: copilot
+    value: .copilot/prompts/commit-push-pr.prompt.md
+    runtime: null
+    scope: user
+    owners:
+      - anthropics/claude-plugins-official/plugins/commit-commands
+    active_owner: anthropics/claude-plugins-official/plugins/commit-commands
+    content_hash: sha256:3bc3d171939149cbbef141cbced553dce6ba6f97dac4a764f4ef1e055c35064d
+  - kind: project-relative
+    target: copilot
+    value: .copilot/prompts/commit.prompt.md
+    runtime: null
+    scope: user
+    owners:
+      - anthropics/claude-plugins-official/plugins/commit-commands
+    active_owner: anthropics/claude-plugins-official/plugins/commit-commands
+    content_hash: sha256:d1acbc2bf0c50164f48d6bda872de6a343cd9390954ce903c3431c3119e7f8c4

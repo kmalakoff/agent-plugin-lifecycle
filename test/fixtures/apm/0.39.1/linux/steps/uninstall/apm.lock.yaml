@@ -1,0 +1,46 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: _local/lifecycle-demo-dep
+    name: lifecycle-demo-dep
+    version: 1.0.0
+    package_type: marketplace_plugin
+    deployed_files:
+      - .agents/skills/shout
+      - .agents/skills/shout/SKILL.md
+      - .agents/skills/shout/apl.json
+    deployed_file_hashes:
+      .agents/skills/shout/SKILL.md: sha256:9713a465f29ddc739c636cce2254f7c1069ce43030f5a0a1dcba42bd7f57df2c
+      .agents/skills/shout/apl.json: sha256:d6129e3ebea59c17dd968c4d8822e0438f8cec1c181709e85010f83afb8c1fa8
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:78bd87def616abefabf204c1d445e3d692d215616d7de12011293fdab2973a01
+deployments:
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: null
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout/SKILL.md
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:9713a465f29ddc739c636cce2254f7c1069ce43030f5a0a1dcba42bd7f57df2c
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout/apl.json
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:d6129e3ebea59c17dd968c4d8822e0438f8cec1c181709e85010f83afb8c1fa8

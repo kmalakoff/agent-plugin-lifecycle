@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
-import { join, parse as parsePath, relative, sep } from 'node:path';
+import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, parse as parsePath, relative, sep } from 'node:path';
 import { safeRmSync } from 'fs-remove-compat';
 import { parse as parseYaml } from 'yaml';
 
@@ -31,15 +31,26 @@ export type GitRootStep = (typeof GIT_ROOT_STEPS)[number];
 /** The plain skill repository scenario: a repository of bare `skills/<name>/SKILL.md` folders with no manifest, one skill selected with `skills:`. */
 export const GIT_SKILLS_STEPS = ['gitskills-install', 'gitskills-update', 'gitskills-uninstall'] as const;
 export type GitSkillsStep = (typeof GIT_SKILLS_STEPS)[number];
-export type AnyStep = Step | GitStep | GitRootStep | GitSkillsStep;
+/** The local plugins again, installed into a project (`apm install` without `-g`). */
+export const PROJECT_STEPS = ['project-install', 'project-update', 'project-reinstall', 'project-uninstall'] as const;
+export type ProjectStep = (typeof PROJECT_STEPS)[number];
+
+/** GIT_SKILLS_SOURCE installed for Claude Code at user scope with CLAUDE_CONFIG_DIR outside the home folder, and inside it but not ~/.claude. */
+export const CLAUDE_DIR_STEPS = ['claudedir-outside-install', 'claudedir-home-install'] as const;
+export type ClaudeDirStep = (typeof CLAUDE_DIR_STEPS)[number];
+export type AnyStep = Step | ProjectStep | GitStep | GitRootStep | GitSkillsStep | ClaudeDirStep;
+export const ALL_STEPS: AnyStep[] = [...STEPS, ...PROJECT_STEPS, ...GIT_STEPS, ...GIT_ROOT_STEPS, ...GIT_SKILLS_STEPS, ...CLAUDE_DIR_STEPS];
+/** The lifecycle events the live suite records; `apl install` is registered for `post-install` alone, as the README registers it. */
+export const APM_EVENTS = ['post-install', 'post-update', 'post-uninstall'] as const;
+export const APL_EVENT = 'post-install';
 
 /**
  * The Git-sourced scenarios install real, popular public repositories the way a client does, never anything of ours.
  * `update: 'tag'` sources are pinned to the commit of an old annotated release tag; `apm update` moves a full-SHA pin to the
  * latest annotated semver tag, fires post-update, and so the scenario asserts only what holds for any newer release.
  * `update: 'pin'` is for a source without release tags: the test edits the pin to a second fixed commit and runs
- * `apm install --update` (post-install fires again). `skill` is the skill the config records by name; `select` is the `skills:`
- * selection written to apm.yml. The configured commands are always our own marker commands, never code from these repositories.
+ * `apm install --update` (post-install fires again). `skill` is the skill the scenario looks for; `select` is the `skills:`
+ * selection written to apm.yml. The scripts are always the test's own `apl.json` (GIT_MANIFEST), never code from these repositories.
  */
 export interface GitSource {
   url: string;
@@ -130,52 +141,31 @@ export function isolatedEnvironment(home: string, extra: NodeJS.ProcessEnv = {})
   return env;
 }
 
-/** A fresh disposable account under the package .tmp/: <root>/home (the account home) and <root>/plugins (a copy of the test plugins). */
-export async function makeAccount(prefix: string): Promise<{ root: string; home: string; plugins: string }> {
+/**
+ * A fresh disposable account under the package .tmp/: <root>/home (the account home), <root>/plugins (a copy of the test plugins) and
+ * <root>/outside (a folder outside the home, for harness folders moved there).
+ */
+export async function makeAccount(prefix: string): Promise<{ root: string; home: string; plugins: string; outside: string }> {
   const scratch = join(packageRoot, '.tmp');
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(join(scratch, `${prefix}-`));
   const home = join(root, 'home');
   const plugins = join(root, 'plugins');
+  const outside = join(root, 'outside');
   await mkdir(join(home, '.tmp'), { recursive: true });
+  await mkdir(outside);
   await cp(pluginFixtures, plugins, { recursive: true });
-  return { root, home, plugins };
+  return { root, home, plugins, outside };
 }
 export function removeAccount(root: string): void {
   safeRmSync(root);
 }
 
-/** The runner's policy for the test plugin and its dependency; the commands leave marker files in the folders the runner chose. */
-export function lifecycleConfig(plugins: string): { version: 1; plugins: Record<string, string>[] } {
-  const write = (file: string, value: string) => `node -e "require('fs').writeFileSync('${file}',${value})"`;
-  return {
-    version: 1,
-    plugins: [
-      { source: join(plugins, PLUGIN), 'post-install': write('installed.marker', "'yes'"), 'post-uninstall': write('cleanup.done', "'ok'") },
-      { source: join(plugins, PLUGIN), skill: 'greet', 'post-install': write('setup.done', 'process.env.HOME') },
-      { source: join(plugins, DEPENDENCY), skill: 'shout', 'post-install': write('setup.done', 'process.env.HOME') },
-    ],
-  };
-}
+/** The folder of the project-scope scenarios inside the account home. */
+export const PROJECT = 'project';
 
-/** The runner's policy for a Git-sourced package: markers in the folders the runner chose, one record for the whole package and, when the source has a skill, one for that skill. */
-export function gitLifecycleConfig(source: GitSource): { version: 1; plugins: Record<string, string>[] } {
-  const write = (file: string, value: string) => `node -e "require('fs').writeFileSync('${file}',${value})"`;
-  const where: Record<string, string> = source.path === '.' ? {} : { path: source.path };
-  const plugins: Record<string, string>[] = [{ source: source.url, ...where, 'post-install': write('installed.marker', "'yes'"), 'post-update': write('updated.marker', "'yes'"), 'post-uninstall': write('cleanup.done', "'ok'") }];
-  if (source.skill) plugins.push({ source: source.url, ...where, skill: source.skill, 'post-install': write('setup.done', 'process.env.HOME'), 'post-update': write('setup.updated', 'process.env.HOME') });
-  return { version: 1, plugins };
-}
-
-/**
- * The quiet-update scenario's policy: one skill record whose command makes `node_modules/marker.json` in the copy (a file inside the
- * folder is what APM sees as drift; an empty folder is not) and appends one line to a run log outside every copy.
- */
-export function quietLifecycleConfig(source: GitSource, runLog: string): { version: 1; plugins: Record<string, string>[] } {
-  const posix = runLog.split(sep).join('/');
-  const command = `node -e "require('fs').appendFileSync('${posix}','run\\n');require('fs').mkdirSync('node_modules',{recursive:true});require('fs').writeFileSync('node_modules/marker.json','{}')"`;
-  return { version: 1, plugins: [{ source: source.url, ...(source.skill ? { skill: source.skill } : {}), ...(source.path === '.' ? {} : { path: source.path }), 'post-install': command, 'post-update': command }] };
-}
+/** The `apl.json` the Git scenarios add to each copy APM deployed (the public repositories ship none); the script leaves `apl.marker`. */
+export const GIT_MANIFEST = `${JSON.stringify({ scripts: { install: `node -e "require('fs').writeFileSync('apl.marker','yes')"` } })}\n`;
 
 export function deepShape(value: unknown): unknown {
   if (value === null) return 'null';
@@ -193,26 +183,33 @@ export function deepShape(value: unknown): unknown {
 export interface Locations {
   home: string;
   plugins: string;
+  /** A folder outside the home (`<OUTSIDE>`), for the CLAUDE_CONFIG_DIR steps. */
+  outside?: string;
 }
 const escapeJson = (text: string): string => JSON.stringify(text).slice(1, -1);
 export function tokenize(text: string, locations: Locations, json: boolean): string {
   let result = text;
   for (const [token, path] of [
     ['<PLUGINS>', locations.plugins],
+    ['<OUTSIDE>', locations.outside],
     ['<HOME>', locations.home],
   ] as const) {
-    for (const form of new Set([path, escapeJson(path)])) result = result.split(form).join(token);
+    if (path === undefined) continue;
+    // APM on Windows writes some absolute paths with forward slashes (`D:/a/...`)
+    for (const form of new Set([path, escapeJson(path), path.split('\\').join('/')])) result = result.split(form).join(token);
   }
   // keep recorded paths POSIX-shaped whatever OS wrote them
-  return result.replace(/<(?:HOME|PLUGINS)>([\\/][^"'\s,\]}]*)/g, (match, rest: string) => match.slice(0, match.length - rest.length) + rest.replace(json ? /\\\\|\\/g : /\\/g, '/'));
+  return result.replace(/<(?:HOME|PLUGINS|OUTSIDE)>([\\/][^"'\s,\]}]*)/g, (match, rest: string) => match.slice(0, match.length - rest.length) + rest.replace(json ? /\\\\|\\/g : /\\/g, '/'));
 }
 export function relocate(text: string, locations: Locations, json: boolean): string {
   const place = (path: string) => (json ? escapeJson(path) : path);
-  return text.split('<PLUGINS>').join(place(locations.plugins)).split('<HOME>').join(place(locations.home));
+  const relocated = text.split('<PLUGINS>').join(place(locations.plugins)).split('<HOME>').join(place(locations.home));
+  return locations.outside === undefined ? relocated : relocated.split('<OUTSIDE>').join(place(locations.outside));
 }
 export interface RecordedStep {
   lock: string;
-  events: { file: string; payload: string }[];
+  /** The lifecycle events APM fired during the step, in order. */
+  events: string[];
   deployed: string[];
 }
 export interface Recording {
@@ -220,23 +217,14 @@ export interface Recording {
   version: string;
   os: string;
   provenance: Record<string, unknown>;
-  steps: Record<Step, RecordedStep>;
-  /** Present when the recording includes the Git-sourced scenario. */
-  gitSteps?: Record<GitStep, RecordedStep>;
-  /** Present when the recording includes the whole-repository Git scenario. */
-  gitRootSteps?: Record<GitRootStep, RecordedStep>;
-  /** Present when the recording includes the plain skill repository scenario. */
-  gitSkillsSteps?: Record<GitSkillsStep, RecordedStep>;
+  /** Every step the recording holds; a Git scenario that could not run is absent. Project steps are relative to the project. */
+  steps: Partial<Record<AnyStep, RecordedStep>>;
 }
-async function loadStep(dir: string, step: AnyStep): Promise<RecordedStep> {
-  const base = join(dir, 'steps', step);
-  const eventDir = join(base, 'events');
-  const files = (await readdir(eventDir).catch(() => [])).sort();
-  return {
-    lock: await readFile(join(base, 'apm.lock.yaml'), 'utf8'),
-    events: await Promise.all(files.map(async (file) => ({ file, payload: await readFile(join(eventDir, file), 'utf8') }))),
-    deployed: JSON.parse(await readFile(join(base, 'deployed.json'), 'utf8')),
-  };
+/** The recorded step, failing when the recording lacks it. */
+export function recordedStep(recording: Recording, step: AnyStep): RecordedStep {
+  const found = recording.steps[step];
+  if (!found) throw new Error(`${recording.dir} has no ${step} step; record again (test/README.md)`);
+  return found;
 }
 /** Where a Git scenario of a recording installed from (its provenance), which can differ from the constants if the pins moved. */
 export function recordedGitSource(recording: Recording, kind: 'git' | 'gitroot' | 'gitskills' = 'git'): GitSource {
@@ -246,27 +234,19 @@ export function recordedGitSource(recording: Recording, kind: 'git' | 'gitroot' 
   const parts = new URL(source.url).pathname.replace(/^\/|\.git$/g, '');
   return { url: source.url, path: source.path, skill: source.skill, select: source.select, update: source.update, target: source.target, repo: parts, host: new URL(source.url).hostname, pins: { first: source.first, second: source.second } };
 }
+/** The file of a recording that lists the events of each step. */
+export const EVENTS_FILE = 'events.json';
 export async function loadRecording(dir: string): Promise<Recording> {
   const provenance = JSON.parse(await readFile(join(dir, 'provenance.json'), 'utf8'));
-  const steps = {} as Record<Step, RecordedStep>;
-  for (const step of STEPS) steps[step] = await loadStep(dir, step);
-  let gitSteps: Record<GitStep, RecordedStep> | undefined;
-  if (existsSync(join(dir, 'steps', GIT_STEPS[0]))) {
-    gitSteps = {} as Record<GitStep, RecordedStep>;
-    for (const step of GIT_STEPS) gitSteps[step] = await loadStep(dir, step);
-  }
-  let gitRootSteps: Record<GitRootStep, RecordedStep> | undefined;
-  if (existsSync(join(dir, 'steps', GIT_ROOT_STEPS[0]))) {
-    gitRootSteps = {} as Record<GitRootStep, RecordedStep>;
-    for (const step of GIT_ROOT_STEPS) gitRootSteps[step] = await loadStep(dir, step);
-  }
-  let gitSkillsSteps: Record<GitSkillsStep, RecordedStep> | undefined;
-  if (existsSync(join(dir, 'steps', GIT_SKILLS_STEPS[0]))) {
-    gitSkillsSteps = {} as Record<GitSkillsStep, RecordedStep>;
-    for (const step of GIT_SKILLS_STEPS) gitSkillsSteps[step] = await loadStep(dir, step);
+  const events = JSON.parse(await readFile(join(dir, EVENTS_FILE), 'utf8')) as Record<string, string[]>;
+  const steps: Partial<Record<AnyStep, RecordedStep>> = {};
+  for (const step of ALL_STEPS) {
+    const base = join(dir, 'steps', step);
+    if (!existsSync(base)) continue;
+    steps[step] = { lock: await readFile(join(base, 'apm.lock.yaml'), 'utf8'), events: events[step] ?? [], deployed: JSON.parse(await readFile(join(base, 'deployed.json'), 'utf8')) };
   }
   const parts = relative(recordingsRoot, dir).split(sep);
-  return { dir, version: parts[0], os: parts[1], provenance, steps, gitSteps, gitRootSteps, gitSkillsSteps };
+  return { dir, version: parts[0], os: parts[1], provenance, steps };
 }
 export function listRecordings(): string[] {
   const dirs: string[] = [];
@@ -289,26 +269,92 @@ export async function pickRecording(version: string, os: OsLabel): Promise<strin
   const all = listRecordings();
   const exact = all.find((dir) => dir === join(recordingsRoot, version, os));
   if (exact) return exact;
+  // the lock and event shapes belong to the APM version, so the same version on another OS comes before an older version on this OS
+  const sameVersion = all.filter((dir) => dir.startsWith(`${join(recordingsRoot, version)}${sep}`));
+  if (sameVersion.length) return sameVersion[sameVersion.length - 1];
   const sameOs = all.filter((dir) => dir.endsWith(`${sep}${os}`));
   return sameOs[sameOs.length - 1] ?? all[all.length - 1];
 }
 
-/** Home-relative POSIX paths of every file under the home that APM (not the test's own commands) wrote. */
-const IGNORED_PREFIXES = ['.tmp/', '.cache/', '.config/agent-plugin-lifecycle/', '.apm/logs/'];
-const IGNORED_NAMES = new Set(['installed.marker', 'setup.done', 'cleanup.done']);
-export async function listFiles(home: string): Promise<string[]> {
+/** Root-relative POSIX paths of every file under `root`, apart from scratch, caches, APM's logs, apl's own state and the project folder. */
+const IGNORED_PREFIXES = ['.tmp/', '.cache/', '.apl/', '.apm/logs/', `${PROJECT}/`];
+export async function listFiles(root: string): Promise<string[]> {
   const found: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) await walk(full);
-      else found.push(relative(home, full).split(sep).join('/'));
+      else found.push(relative(root, full).split(sep).join('/'));
     }
   };
-  await walk(home);
-  return found.filter((path) => !IGNORED_PREFIXES.some((prefix) => path.startsWith(prefix)) && !IGNORED_NAMES.has(path.split('/').pop() ?? '')).sort();
+  await walk(root);
+  return found.filter((path) => !IGNORED_PREFIXES.some((prefix) => path.startsWith(prefix))).sort();
 }
 
+const KEPT_LOCAL = /^(?:\.apm\/)?apm_modules\/_local\/([^/]+)\/(.+)$/;
+const NATIVE_FILE = /^\.agents\/plugins\/([^/.][^/]*)\/(.+)$/;
+const SKILL_FILE = /^(?:\.agents|\.claude|\.hermes)\/skills\/([^/.][^/]*)\/(.+)$/;
+/** The test plugin file a recorded deployed path is a copy of, or undefined when it is not one. */
+async function fixtureSource(plugins: string, path: string): Promise<string | undefined> {
+  const candidates: string[] = [];
+  const kept = KEPT_LOCAL.exec(path) ?? NATIVE_FILE.exec(path);
+  if (kept) candidates.push(join(plugins, kept[1], ...kept[2].split('/')));
+  const skill = /(?:^|\/)skills\/([^/]+)\/(.+)$/.exec(path);
+  if (skill) for (const plugin of [PLUGIN, DEPENDENCY]) candidates.push(join(plugins, plugin, 'skills', skill[1], ...skill[2].split('/')));
+  for (const candidate of candidates) if (existsSync(candidate)) return candidate;
+  return undefined;
+}
+/** Recreates a recorded step's files under `root` with the test plugins' content, and each kept local copy whole, as APM keeps it. */
+export async function placeFiles(root: string, plugins: string, paths: string[]): Promise<void> {
+  const keptPlugins = new Set<string>();
+  for (const path of paths) {
+    const target = join(root, ...path.split('/'));
+    await mkdir(dirname(target), { recursive: true });
+    const source = await fixtureSource(plugins, path);
+    if (source) await cp(source, target);
+    // the only other apl.json the live suite writes is the one the Git scenarios add, which APM may keep through an update
+    else await writeFile(target, path.endsWith('apl.json') ? GIT_MANIFEST : '');
+    const kept = KEPT_LOCAL.exec(path);
+    if (kept) keptPlugins.add(path.slice(0, path.length - kept[2].length - 1));
+  }
+  for (const keptRoot of keptPlugins) {
+    const name = keptRoot.split('/').pop() ?? '';
+    for (const manifest of await manifestsIn(join(plugins, name))) {
+      const target = join(root, ...keptRoot.split('/'), ...manifest.split('/'));
+      await mkdir(dirname(target), { recursive: true });
+      if (!existsSync(target)) await cp(join(plugins, name, ...manifest.split('/')), target);
+    }
+  }
+}
+/** Root-relative POSIX paths of every `apl.json` under `dir`. */
+export async function manifestsIn(dir: string): Promise<string[]> {
+  return (await listFiles(dir)).filter((path) => path === 'apl.json' || path.endsWith('/apl.json'));
+}
+const aplFolders = (files: string[]) => files.filter((path) => path === 'apl.json' || path.endsWith('/apl.json')).map((path) => path.split('/').slice(0, -1).join('/'));
+const inCache = (folder: string) => /(^|\/)apm_modules\//.test(folder);
+/** The folders apl must treat as copies, read from what APM deployed: every folder holding an `apl.json` outside APM's cache (`apm_modules`). */
+export function expectedCopies(root: string, files: string[]): string[] {
+  return aplFolders(files)
+    .filter((folder) => !inCache(folder))
+    .map((folder) => join(root, ...folder.split('/')))
+    .sort();
+}
+/**
+ * The folders a Git scenario adds `apl.json` to, read from what APM deployed: each deployed skill folder, and each native plugin folder
+ * and its `skills/<name>/`. Empty when APM deployed neither, so its cache is the package's only copy.
+ */
+export function gitCopyFolders(root: string, files: string[]): string[] {
+  const folders = new Set<string>();
+  for (const path of files) {
+    const parts = path.split('/');
+    if (SKILL_FILE.test(path)) folders.add(parts.slice(0, 3).join('/'));
+    if (NATIVE_FILE.test(path)) {
+      folders.add(parts.slice(0, 3).join('/'));
+      if (parts[3] === 'skills' && parts.length > 5) folders.add(parts.slice(0, 5).join('/'));
+    }
+  }
+  return [...folders].map((folder) => join(root, ...folder.split('/'))).sort();
+}
 export async function hashTree(dir: string): Promise<string> {
   const hash = createHash('sha256');
   const walk = async (current: string): Promise<void> => {
@@ -328,4 +374,19 @@ export async function hashTree(dir: string): Promise<string> {
 export function lockRows(text: string): Record<string, unknown>[] {
   const lock = parseYaml(text) as { dependencies?: Record<string, unknown>[] };
   return lock.dependencies ?? [];
+}
+
+/** The recording of the newest APM version, for this OS when there is one. */
+export async function newestRecording(): Promise<Recording> {
+  const all = listRecordings();
+  if (!all.length) throw new Error(`no recording under ${recordingsRoot}; record one (test/README.md)`);
+  const versionOf = (dir: string) => relative(recordingsRoot, dir).split(sep)[0];
+  const newest = all.filter((dir) => versionOf(dir) === versionOf(all[all.length - 1]));
+  return loadRecording(newest.find((dir) => dir.endsWith(`${sep}${osLabel()}`)) ?? newest[newest.length - 1]);
+}
+/** Recreates a recorded step in `root` (its files and its lock at `lock`), relocated into `home` and `plugins`. */
+export async function placeStep(step: RecordedStep, root: string, lock: string, locations: Locations, lockText: string = step.lock): Promise<void> {
+  await placeFiles(root, locations.plugins, step.deployed);
+  await mkdir(dirname(lock), { recursive: true });
+  await writeFile(lock, relocate(lockText, locations, false));
 }

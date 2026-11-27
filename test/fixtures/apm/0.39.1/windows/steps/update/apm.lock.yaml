@@ -1,0 +1,62 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: _local/lifecycle-demo
+    name: lifecycle-demo
+    version: 1.0.0
+    package_type: agent_plugin
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo
+    content_hash: sha256:3544f61eb058a7706bc0fb2d3af9787b4b5304431327af4c04441293b6eaae81
+    native_plugin:
+      name: lifecycle-demo
+      root: .agents/plugins/lifecycle-demo
+      fingerprint: sha256:a03ca01f2c4e2b7d5d6f0214fd8f43a30d2796a74b52f4216d59a029779fe602
+      marketplace:
+        name: apm-u-582d631f
+        path: <HOME>/.agents/plugins
+    native_declared:
+      - copilot
+  - repo_url: _local/lifecycle-demo-dep
+    name: lifecycle-demo-dep
+    version: 1.0.0
+    package_type: marketplace_plugin
+    deployed_files:
+      - .agents/skills/shout
+      - .agents/skills/shout/SKILL.md
+      - .agents/skills/shout/apl.json
+    deployed_file_hashes:
+      .agents/skills/shout/SKILL.md: sha256:9713a465f29ddc739c636cce2254f7c1069ce43030f5a0a1dcba42bd7f57df2c
+      .agents/skills/shout/apl.json: sha256:d6129e3ebea59c17dd968c4d8822e0438f8cec1c181709e85010f83afb8c1fa8
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:78bd87def616abefabf204c1d445e3d692d215616d7de12011293fdab2973a01
+deployments:
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: null
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout/SKILL.md
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:9713a465f29ddc739c636cce2254f7c1069ce43030f5a0a1dcba42bd7f57df2c
+  - kind: project-relative
+    target: copilot
+    value: .agents/skills/shout/apl.json
+    runtime: null
+    scope: user
+    owners:
+      - <PLUGINS>/lifecycle-demo-dep
+    active_owner: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:d6129e3ebea59c17dd968c4d8822e0438f8cec1c181709e85010f83afb8c1fa8

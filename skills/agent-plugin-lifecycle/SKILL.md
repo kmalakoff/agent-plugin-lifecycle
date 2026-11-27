@@ -1,108 +1,68 @@
 ---
 name: agent-plugin-lifecycle
-description: "Run a plugin's own setup and cleanup commands when Agent Package Manager (APM) installs, updates or removes it: install its dependencies (npm ci, uv sync, any language) in every deployed copy, and clean up after removal. Use when an APM-installed plugin or skill needs dependencies or setup, when writing or changing ~/.config/agent-plugin-lifecycle/config.json, when registering lifecycle hooks in ~/.apm/apm.yml, or when checking whether a plugin's setup succeeded."
+description: "Ship and run the setup command an agent plugin or skill needs (npm ci, uv sync, any language) with apl: write its apl.json, register `apl install` in APM's ~/.apm/apm.yml, approve scripts, and check copies with `apl status`. Use when a plugin or skill installed by APM, npx skills or by hand needs dependencies or setup, when writing or reviewing an apl.json, or when `apl` reports unapproved, missing, stale, failed or left."
 ---
 
-# agent-plugin-lifecycle
+# agent-plugin-lifecycle (`apl`)
 
-APM installs a plugin and copies it into each harness: a native plugin copy under `~/.agents/plugins/` and copies of its skills (`~/.agents/skills`, `~/.claude/skills`, `~/.hermes/skills`), plus its own kept copy under `~/.apm/apm_modules/`. APM never runs a plugin's own code. `agent-plugin-lifecycle` is the machine owner's hook: APM calls it after each install, update and removal, and it runs the commands the owner configured for that plugin in each copy a harness reads. It leaves APM's kept copy alone unless that is the only copy (Copilot reads it in place), because a file written there makes the next `apm update` restore APM's cache and fire its events again. Commands come only from the owner's config, never from downloaded plugin files.
+Installers (Agent Package Manager (APM), the skills CLI `npx skills add`, Claude Code, Codex) copy a plugin or skill into each harness and run none of its code. The author ships the setup command in `apl.json`; the machine owner approves it once; `apl install` runs it in every **copy**, a folder holding that `apl.json`. Approvals are per user, in `~/.apl/approvals.json`, and belong to the **place** they were given in: a project, the user scope, or a named folder. The owner is asked again in each new place and when the command text changes. Two branches below: the author's and the machine owner's.
 
-## Set up a machine
+## Author: add `apl.json`
 
-1. Install the CLI (Node.js 22.18 or newer):
+1. Place it where the setup is needed: in a skill folder beside `SKILL.md` (`skills/<name>/apl.json`, reaches every deployed copy of the skill), or at the plugin root, beside `plugin.json` or beside `.claude-plugin/` and never inside it (reaches the plugin's native copy `.agents/plugins/<name>/`). An `apl.json` at the root of a repository of plain skills reaches no skill copy, only APM's cache, and is reported `skipped`; one under `.apm/` is stripped by APM.
+2. Write the one script:
 
-   ```sh
-   npm install -g agent-plugin-lifecycle
+   ```json
+   { "scripts": { "install": "npm ci --no-bin-links" } }
    ```
 
-2. Register it for the three events in the user `~/.apm/apm.yml` (create the `lifecycle` block, or add these entries to an existing one). APM requires `name` and `version` in that file before the first install:
+   - It runs through the platform shell (`sh`, or `cmd.exe` on Windows) exactly as written, in the folder that holds `apl.json`, with standard input closed. For anything beyond one portable command, call a script: `node setup.js`.
+   - It must be safe to repeat: it runs again in each copy when the plugin changes or a copy is recreated.
+   - npm in a plugin copy needs `--no-bin-links`: APM refuses later installs of a copy containing a symlink, which `node_modules/.bin` adds.
+   - Unknown fields are ignored; only `scripts.install` runs, and a named folder without it is `failed …: apl.json has no scripts.install`. Editing the command makes every user approve it again.
+
+Done when `apl install -y <folder>` on a local copy prints `ran` and `apl status <folder>` prints `ok`.
+
+## Machine owner: register, approve, check
+
+1. Install: `npm install -g agent-plugin-lifecycle` (Node.js 22.18 or newer; the command is `apl`, also `agent-plugin-lifecycle`; the npm name `apl` is someone else's package).
+2. With APM, register it once in the user `~/.apm/apm.yml`; the entry fires for project and `-g` installs alike, and on every update:
 
    ```yaml
    name: my-machine
    version: 0.0.0
    lifecycle:
      post-install:
-       - run: agent-plugin-lifecycle run
-         timeoutSec: 300
-     post-update:
-       - run: agent-plugin-lifecycle run
-         timeoutSec: 300
-     post-uninstall:
-       - run: agent-plugin-lifecycle run
+       - run: apl install
          timeoutSec: 300
    ```
 
-   - `timeoutSec` (seconds) is needed: APM kills a lifecycle command after 30 seconds by default and still exits 0. One entry runs all configured commands for the event, so size it for all of them.
-   - APM drops credential-looking environment variables (`NPM_TOKEN`, `*_API_KEY`, `*_PASSWORD`, ...) from lifecycle commands; list any the commands need on the entry: `allowedEnvVars: [NPM_TOKEN]`.
-   - Write SSH dependencies in `apm.yml` as the full `git@host:owner/repo.git` URL; the short `host/owner/repo` form that `apm install --ssh` writes is fetched over HTTPS later.
+   - `timeoutSec` is needed: APM kills a lifecycle command after 30 seconds by default and still exits 0.
+   - APM strips credential-looking variables (`NPM_TOKEN`, `*_API_KEY`, ...); list any a script needs as `allowedEnvVars: [NPM_TOKEN]` on the entry.
+   - `apm lifecycle` lists the entry once it is registered.
+   - APM's run has no terminal: it runs approved scripts and only reports unapproved ones, as `[!] Lifecycle post-install command script exited with code 1; continuing. Output: ~/.apm/logs/scripts.log`. That line means a script waits for approval: step 3.
+3. Approve: after the first `apm install` in each project, run `apl install` yourself in the project root (or `apl install -g` for a user install); an approval given in one project, or at user scope, never applies in another. It shows each id, the command and its folders and asks `Run it? [y/N]`; all questions come first and the approvals are saved after the last, so Ctrl+C saves nothing. `-y` approves everything unapproved at that moment without asking and saves it (CI). An agent without a terminal reads `scripts.install` from `<folder>/apl.json` for each `unapproved <id> <folder>` line of `apl status`, shows the owner each id with that command, and runs `apl install -y` in that same place only on the owner's go-ahead: approving is the owner's decision.
+4. With the skills CLI, name the folders it created: `npx skills add team/skills --skill report -a claude-code -a codex` writes `.agents/skills/report` and links `.claude/skills/report` to it (one copy), so `apl install .agents/skills/report .claude/skills/report`; with `-g`, the same folders under the home. After `npx skills update`, run that `apl install` again: there is no hook. Any other installer or a copy by hand: name its folders the same way. A named folder runs every time it is named.
+5. Check: `apl status` (or `-g`, or folders) after any APM command that automation relies on, since APM exits 0 when a lifecycle command fails.
 
-Done when `agent-plugin-lifecycle --help` prints its usage and `~/.apm/apm.yml` has `name`, `version` and all three entries with `timeoutSec`.
+Done when `apl status` exits 0.
 
-## Configure a plugin
+## Reading `apl` output
 
-Add one record per plugin, or per skill inside it, to `~/.config/agent-plugin-lifecycle/config.json`:
+Read results from `apl status`, or from the standard output of `apl install`, which holds only `apl`'s lines (scripts print to standard error). Each line is printed as its result is known. An id or folder that holds a space or unusual characters prints as a JSON string (it starts with `"`): decode it before using it as a path.
 
-```json
-{
-  "version": 1,
-  "plugins": [
-    {
-      "source": "git@github.com:team/plugins.git",
-      "path": "plugins/example",
-      "post-install": "npm ci --prefix server --no-bin-links",
-      "post-uninstall": "node .config/agent-plugin-lifecycle/cleanup-example.js"
-    },
-    {
-      "source": "git@github.com:team/plugins.git",
-      "path": "plugins/example",
-      "skill": "hello-py",
-      "post-install": "uv sync"
-    }
-  ]
-}
-```
-
-| Field | Meaning |
+| Line | What to do |
 |---|---|
-| `source` | The plugin's source exactly as `apm.yml` names it: a Git URL, or the absolute local path. |
-| `path` | The plugin's folder inside that repository; `.` (the default) is the repository root. |
-| `skill` | Optional. The record applies to each deployed copy of that one skill (`skills/<name>`) instead of the whole plugin. |
-| `post-install` | Runs in each deployed copy after install. |
-| `post-update` | Runs in each deployed copy after update. Defaults to `post-install`, so most records write the installer once. |
-| `post-uninstall` | Runs once after APM removes the plugin. |
+| `ran`, `current`, `ok` | Nothing. |
+| `unapproved <id> <folder>` | New or changed command: the owner approves it with `apl install` (answer `y`) or `apl install -y`. |
+| `missing <id> <folder>` | Approved but never succeeded here: run `apl install` and read the script's output. |
+| `stale <id> <folder>` | Succeeded for an older revision or command: run `apl install`. |
+| `failed <id> <folder>: <reason>` | `exit code N` is the script failing; `resolves to …, outside …` is a folder or `apl.json` linking out of the scope (never run); `copies of <id> disagree on install` is copies with different commands; `apl.json has no scripts.install` or `no apl.json` is a named folder without a script; a lock path as the folder is a lock row `apl` cannot use (the reason names the field); otherwise `apl.json` is invalid. Fix the cause, then `apl install`. |
+| `skipped <id> <folder>: APM's cache is the only copy; scripts do not run there` | That `apl.json` reaches no folder APM deployed (a commands-only plugin installed for Copilot, a root `apl.json` of a repository of plain skills, or a lock entry or link into `apm_modules`), so it never runs. Not counted against the exit code; the author moves `apl.json` to a deployed folder. |
+| `left <folder>` | APM removed the package but kept this folder, because it holds files APM did not write. Delete it by hand. |
 
-Rules for the commands:
+Exit codes: 0 all fine (`skipped` and `left` do not count), 1 a copy needs attention, 2 `apl` could not work (bad arguments, unreadable lock, unwritable `~/.apl`, a `~/.apl` not owned by the user or writable by group or others (`chmod go-w`), or `no apm.lock.yaml here: pass -g or a folder`), 130 Ctrl+C at the question (nothing saved or run).
 
-- A command is a string like an npm script, run through the platform shell (`sh`, or `cmd.exe` on Windows) with the copy as its working directory. Write it for that machine's shell.
-- A command must be safe to repeat, as `npm ci` and `uv sync` are: it runs again whenever APM changes the plugin or recreates a copy. A copy where the same command already succeeded for the locked revision is skipped (`current`), so an update with nothing new runs nothing.
-- APM runs the command after writing the new files into the copy and waits for it. Until it finishes, the copy has the new files beside the previous packages, and an `npm ci` leaves it without packages while it reinstalls (only when the plugin changed).
-- Use `npm ci --no-bin-links` (or `npm_config_bin_links=false`). APM fingerprints the Claude Code plugin copy and refuses later installs when that copy contains a symlink, which `node_modules/.bin` would add. Keep other symlinks out of deployed copies the same way.
-- `post-uninstall` runs from the home folder after the plugin's files are gone, so it calls a file the owner keeps outside the plugin.
+An id is `<host>/<repo>[/<path>][:<folder>]` for a Git source, the absolute source path plus `:<folder>` for a local one, the folder's real path for a named folder. A place is the real path of the project folder, of the APM home (`-g`), or of the named folder. `~/.apl/approvals.json` holds `approvals.<place>.<id>` with `scripts.install` and `approved`; to revoke an approval, delete that entry.
 
-For a repository of plain skills (`skills/<name>/SKILL.md`, no plugin manifest), select the skills on its `apm.yml` entry with `skills: [name]` (what `apm install owner/repo --skill name` writes), and give each skill a record with `source` and `skill` and no `path`.
-
-Then run `apm install` (or `apm update`) as usual; the commands run inside it.
-
-`apm update` moves a pinned source only to a newer release tag and then fires `post-update`. For a source without release tags, change the pin and run `apm install --update`; that fires `post-install`, and the commands still run because `post-update` defaults to `post-install`.
-
-## Check a machine
-
-```sh
-agent-plugin-lifecycle check
-```
-
-It prints one line per copy of every installed, configured record and exits 1 unless all are `ok`: `ok` (the current command succeeded for the locked revision), `missing` (never succeeded there), `stale` (succeeded for an older revision or command), `broken` (succeeded, but the copy is gone). With nothing installed it prints `nothing installed` and exits 0. APM exits 0 even when a hook fails or times out, so run `check` after every APM command that automation relies on:
-
-```sh
-apm update -g --yes && agent-plugin-lifecycle check
-```
-
-`check` does not look inside a copy: packages deleted from it by hand are not detected.
-
-## Uninstall leftovers
-
-APM keeps a copy's folder when it still holds files APM did not write (the `node_modules` a command made). The hook prints `left <path>` for each such copy before the record's `post-uninstall` command, and deletes nothing; remove them by hand or from `post-uninstall`.
-
-To fix a failed record: correct the command in `config.json`, then run `apm install` again; the commands run again and `check` turns clean.
-
-More configurations: [EXAMPLES.md](EXAMPLES.md).
+More setups: [EXAMPLES.md](EXAMPLES.md).

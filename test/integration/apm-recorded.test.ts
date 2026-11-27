@@ -1,32 +1,241 @@
-// Package tests driven by recordings of real APM runs (test/fixtures/apm/<apm-version>/<os>/): no APM needed, every OS, every run.
-// A recording is a change detector for APM's lock and event schema, not an oracle for what APM should do. Each recording is
-// relocated into a disposable home under .tmp/ and replayed through the runner exactly as APM delivered it.
-import assert from 'node:assert/strict';
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
-import { type LifecycleEvent, parseLock, runLifecycle } from 'agent-plugin-lifecycle';
+// Recordings of real APM runs (test/fixtures/apm/<apm-version>/<os>/) replayed through apl: no APM needed, every OS, every run.
+// Each step's files and lock are recreated in a disposable home under .tmp/ and apl is run on them as APM's lifecycle entry would.
+// A recording is a change detector for APM's lock and deployment, not an oracle for what APM should do.
+
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { parse as parseYaml } from 'yaml';
-import { DEPENDENCY, gitLifecycleConfig, hashTree, isolatedEnvironment, lifecycleConfig, listRecordings, loadRecording, makeAccount, PLUGIN, pluginFixtures, type RecordedStep, type Recording, recordedGitSource, recordingsRoot, relocate, removeAccount } from '../lib/apm-live.ts';
+import { isUnreadable, parseLock } from '../../src/apm.ts';
+import { CACHE_ONLY } from '../../src/constants.ts';
+import { install } from '../../src/install.ts';
+import { status } from '../../src/status.ts';
+import type { CopyResult, Options } from '../../src/types.ts';
+import {
+  type AnyStep,
+  type ClaudeDirStep,
+  expectedCopies,
+  GIT_MANIFEST,
+  gitCopyFolders,
+  hashTree,
+  isolatedEnvironment,
+  listFiles,
+  listRecordings,
+  loadRecording,
+  makeAccount,
+  PLUGIN,
+  PROJECT,
+  placeFiles,
+  pluginFixtures,
+  type RecordedStep,
+  type Recording,
+  recordedGitSource,
+  recordedStep,
+  recordingsRoot,
+  relocate,
+  removeAccount,
+} from '../lib/apm-live.ts';
 
-const KEPT = /^\.apm\/apm_modules\/_local\/([^/]+)\/(.+)$/;
-const exists = (path: string) =>
-  stat(path).then(
-    () => true,
-    () => false
-  );
+const yes = async () => true;
+const folders = (results: CopyResult[]) => results.map((result) => result.folder).sort();
+const statuses = (results: CopyResult[]) => [...new Set(results.map((result) => result.status))].sort();
 
-async function placeFiles(home: string, plugins: string, paths: string[]): Promise<void> {
-  for (const path of paths) {
-    const target = join(home, ...path.split('/'));
-    await mkdir(dirname(target), { recursive: true });
-    const kept = KEPT.exec(path);
-    if (kept && (await exists(join(plugins, kept[1], ...kept[2].split('/'))))) await copyFile(join(plugins, kept[1], ...kept[2].split('/')), target);
-    else await writeFile(target, '');
+/** One APM scope in a disposable account, driven through the recorded steps. */
+interface Replay {
+  scopeRoot: string;
+  plugins: string;
+  options: Options & { global: boolean };
+  /** Recreates the step's files and lock; files of the previous step that the step no longer lists are deleted. */
+  apply: (step: RecordedStep) => Promise<void>;
+}
+async function openReplay(root: string, home: string, plugins: string, user: boolean): Promise<Replay> {
+  const scopeRoot = user ? home : join(home, PROJECT);
+  const lock = user ? join(home, '.apm', 'apm.lock.yaml') : join(scopeRoot, 'apm.lock.yaml');
+  let previous: string[] = [];
+  return {
+    scopeRoot,
+    plugins,
+    // with -g apl may be run anywhere; a project is used from its root
+    options: { home, cwd: user ? root : scopeRoot, global: user, environment: isolatedEnvironment(home) },
+    apply: async (step) => {
+      for (const gone of previous.filter((path) => !step.deployed.includes(path))) safeRmSync(join(scopeRoot, ...gone.split('/')));
+      previous = step.deployed;
+      await placeFiles(scopeRoot, plugins, step.deployed);
+      await mkdir(dirname(lock), { recursive: true });
+      // APM deletes the lock when the last package is removed
+      if (step.lock.trim()) await writeFile(lock, relocate(step.lock, { home, plugins }, false));
+      else safeRmSync(lock);
+    },
+  };
+}
+/** Removes each folder of which the step lists no file: the recording says APM removed it, whatever the replay itself added there. */
+function removeUnlisted(scopeRoot: string, step: RecordedStep, copies: string[]): void {
+  const listed = step.deployed.map((path) => join(scopeRoot, ...path.split('/')));
+  for (const copy of copies) if (!listed.some((path) => path.startsWith(`${copy}${sep}`))) safeRmSync(copy);
+}
+
+async function replayLocal(recording: Recording, user: boolean): Promise<void> {
+  const [installStep, updateStep, reinstallStep, uninstallStep] = user ? (['install', 'update', 'reinstall', 'uninstall'] as const) : (['project-install', 'project-update', 'project-reinstall', 'project-uninstall'] as const);
+  const step = (name: AnyStep) => recordedStep(recording, name);
+  const { root, home, plugins } = await makeAccount(`apm-recorded-${user ? 'user' : 'project'}`);
+  try {
+    const replay = await openReplay(root, home, plugins, user);
+    const { options, scopeRoot } = replay;
+    const ofPlugin = (result: CopyResult) => !!result.id && (result.id === join(plugins, PLUGIN) || result.id.startsWith(`${join(plugins, PLUGIN)}:`));
+
+    await replay.apply(step(installStep));
+    const copies = expectedCopies(scopeRoot, await listFiles(scopeRoot));
+    assert.ok(copies.length >= 3, `the recording deployed apl.json into ${copies.length} copies`);
+    // APM's lifecycle entry: no terminal, so nothing is asked
+    let results = await install(options);
+    assert.deepStrictEqual(folders(results), copies);
+    assert.deepStrictEqual(statuses(results), ['unapproved']);
+    results = await install({ ...options, approve: yes });
+    assert.deepStrictEqual(statuses(results), ['ran']);
+    for (const copy of copies) assert.ok(existsSync(join(copy, 'installed.marker')) || existsSync(join(copy, 'setup.done')), `the script ran in ${copy}`);
+    assert.deepStrictEqual(statuses(await status(options)), ['ok']);
+
+    await replay.apply(step(updateStep));
+    results = await install(options);
+    assert.deepStrictEqual(folders(results), copies);
+    assert.deepStrictEqual(statuses(results), ['current']);
+
+    await replay.apply(step(reinstallStep));
+    results = await install(options);
+    assert.deepStrictEqual(folders(results), copies);
+    for (const result of results) assert.strictEqual(result.status, ofPlugin(result) ? 'ran' : 'current', `${result.status} ${result.id} ${result.folder}`);
+    const before = await status(options);
+    assert.deepStrictEqual(statuses(before), ['ok']);
+
+    await replay.apply(step(uninstallStep));
+    removeUnlisted(scopeRoot, step(uninstallStep), copies);
+    const after = await status(options);
+    const kept = before.filter((result) => ofPlugin(result) && existsSync(result.folder));
+    assert.deepStrictEqual(folders(after.filter((result) => result.status === 'left')), folders(kept));
+    assert.deepStrictEqual(folders(after.filter((result) => result.status === 'ok')), folders(before.filter((result) => !ofPlugin(result))));
+    assert.strictEqual(after.length, before.filter((result) => !ofPlugin(result)).length + kept.length);
+  } finally {
+    removeAccount(root);
   }
 }
 
-describe('recorded APM runs replayed through the runner', () => {
+/** Every copy is APM's cache: install, even approving everything, reports each `skipped` with the reason and runs nothing; status agrees. */
+async function expectCacheOnly(options: Options, cache: string[], markers: string[]): Promise<void> {
+  assert.ok(cache.length > 0, "the recording has apl.json in APM's cache");
+  let asked = 0;
+  const results = await install({
+    ...options,
+    approve: async () => {
+      asked++;
+      return true;
+    },
+  });
+  assert.deepStrictEqual(folders(results), cache);
+  for (const result of [...results, ...(await status(options))]) assert.deepStrictEqual([result.status, result.reason], ['skipped', CACHE_ONLY], result.folder);
+  assert.strictEqual(asked, 0, 'nothing is asked for a copy in the cache');
+  for (const folder of cache) for (const marker of markers) assert.ok(!existsSync(join(folder, marker)), `nothing ran in ${folder}`);
+}
+
+async function replayGit(recording: Recording, kind: 'git' | 'gitroot' | 'gitskills'): Promise<void> {
+  const source = recordedGitSource(recording, kind);
+  const steps = { install: recordedStep(recording, `${kind}-install`), update: recordedStep(recording, `${kind}-update`), uninstall: recordedStep(recording, `${kind}-uninstall`) };
+  const kept = ['.apm', 'apm_modules', ...source.repo.split('/'), ...(source.path === '.' ? [] : source.path.split('/'))];
+  const { root, home, plugins } = await makeAccount(`apm-recorded-${kind}`);
+  try {
+    const replay = await openReplay(root, home, plugins, true);
+    const { options } = replay;
+    const addManifests = async (copies: string[]) => {
+      for (const copy of copies) {
+        await mkdir(copy, { recursive: true });
+        if (!existsSync(join(copy, 'apl.json'))) await writeFile(join(copy, 'apl.json'), GIT_MANIFEST);
+      }
+    };
+
+    await replay.apply(steps.install);
+    let copies = gitCopyFolders(home, steps.install.deployed);
+    // APM deployed no folder for this package (commit-commands for copilot): its cache is the only copy, where no script runs
+    if (!copies.length) {
+      const cache = [join(home, ...kept)];
+      await addManifests(cache);
+      await expectCacheOnly(options, cache, ['apl.marker']);
+      await replay.apply(steps.update);
+      assert.deepStrictEqual(gitCopyFolders(home, steps.update.deployed), []);
+      await addManifests(cache);
+      await expectCacheOnly(options, cache, ['apl.marker']);
+      await replay.apply(steps.uninstall);
+      assert.deepStrictEqual(await status(options), []);
+      return;
+    }
+    await addManifests(copies);
+    let results = await install({ ...options, approve: yes });
+    assert.deepStrictEqual(folders(results), copies);
+    assert.deepStrictEqual(statuses(results), ['ran']);
+    if (source.skill && source.path === '.') assert.ok(results.some((result) => result.id === `${source.host}/${source.repo}:skills/${source.skill}`));
+    assert.deepStrictEqual(statuses(await status(options)), ['ok']);
+
+    // the update moved the locked commit, so every copy runs again without asking
+    await replay.apply(steps.update);
+    copies = gitCopyFolders(home, steps.update.deployed);
+    await addManifests(copies);
+    results = await install(options);
+    assert.deepStrictEqual(folders(results), copies);
+    assert.deepStrictEqual(statuses(results), ['ran']);
+    assert.deepStrictEqual(statuses(await status(options)), ['ok']);
+
+    await replay.apply(steps.uninstall);
+    removeUnlisted(home, steps.uninstall, copies);
+    const after = await status(options);
+    assert.deepStrictEqual(
+      folders(after),
+      copies.filter((copy) => existsSync(copy))
+    );
+    assert.ok(after.every((result) => result.status === 'left'));
+  } finally {
+    removeAccount(root);
+  }
+}
+
+/**
+ * A plain skill repository installed for Claude Code with CLAUDE_CONFIG_DIR moved: the lock records the skill folder there (absolute
+ * outside the home, relative inside it). The recorded folder is recreated from the lock, an `apl.json` added, and apl must run there.
+ */
+async function replayClaudeDir(recording: Recording, step: ClaudeDirStep): Promise<void> {
+  const recorded = recordedStep(recording, step);
+  const source = recordedGitSource(recording, 'gitskills');
+  const { root, home, plugins, outside } = await makeAccount(`apm-recorded-${step}`);
+  try {
+    const lock = relocate(recorded.lock, { home, plugins, outside }, false);
+    await mkdir(join(home, '.apm'), { recursive: true });
+    await writeFile(join(home, '.apm', 'apm.lock.yaml'), lock);
+    const [row] = parseLock(parseYaml(lock), true);
+    assert.ok(!isUnreadable(row), 'the recorded row reads');
+    const absolute = (path: string) => (isAbsolute(path) ? path : join(home, ...path.split('/')));
+    // each recorded file (an entry with nothing recorded under it), with its folders
+    for (const file of row.deployedFiles.filter((entry) => !row.deployedFiles.some((other) => other.startsWith(`${entry}/`)))) {
+      await mkdir(dirname(absolute(file)), { recursive: true });
+      await writeFile(absolute(file), '');
+    }
+    const folder = step === 'claudedir-outside-install' ? join(outside, 'claude', 'skills', source.skill ?? '') : join(home, 'config', 'claude', 'skills', source.skill ?? '');
+    await writeFile(join(folder, 'apl.json'), GIT_MANIFEST);
+    const options = { home, cwd: root, global: true, environment: isolatedEnvironment(home) };
+    const results = await install({ ...options, approve: yes });
+    assert.deepStrictEqual(
+      results.map((result) => [result.status, result.id, result.folder]),
+      [['ran', `${source.host}/${source.repo}:skills/${source.skill}`, folder]]
+    );
+    assert.ok(existsSync(join(folder, 'apl.marker')), 'the script ran in the folder APM recorded');
+    assert.deepStrictEqual(
+      (await status(options)).map((result) => [result.status, result.folder]),
+      [['ok', folder]]
+    );
+  } finally {
+    removeAccount(root);
+  }
+}
+
+describe('recorded APM runs replayed through apl', () => {
   const recordings = listRecordings();
   it('has at least one recording to replay', () => {
     assert.ok(recordings.length > 0, `no recordings under ${recordingsRoot}`);
@@ -40,148 +249,52 @@ describe('recorded APM runs replayed through the runner', () => {
         recording = await loadRecording(dir);
       });
 
-      it('has provenance for the APM version, OS and plugin the recording was made from', async () => {
+      it('has provenance and was made from the current test plugins', async () => {
         for (const field of ['apm_version', 'apm_commit', 'os', 'recorded_at', 'environment', 'commands', 'plugin_fixtures_sha256', 'kind']) assert.ok(field in recording.provenance, `provenance.json lacks ${field}`);
-        assert.equal(recording.provenance.apm_version, recording.version);
-        assert.equal(recording.provenance.plugin_fixtures_sha256, await hashTree(pluginFixtures), 'test/fixtures/plugins changed since this recording; record again');
+        assert.strictEqual(recording.provenance.apm_version, recording.version);
+        assert.strictEqual(recording.provenance.plugin_fixtures_sha256, await hashTree(pluginFixtures), 'test/fixtures/plugins changed since this recording; record again (test/README.md)');
       });
 
-      it('every recorded lock parses and every recorded event is the shape the runner reads', () => {
-        const steps: [string, RecordedStep][] = [...Object.entries(recording.steps), ...Object.entries(recording.gitSteps ?? {}), ...Object.entries(recording.gitRootSteps ?? {}), ...Object.entries(recording.gitSkillsSteps ?? {})];
-        for (const [step, recorded] of steps) {
-          if (!recorded.lock.trim()) continue; // APM deletes the lock when the last package is removed
-          const rows = parseLock(parseYaml(recorded.lock));
-          for (const row of rows) {
-            if (step.startsWith('git')) {
-              const expected = recordedGitSource(recording, step.startsWith('gitskills-') ? 'gitskills' : step.startsWith('gitroot-') ? 'gitroot' : 'git');
-              assert.ok(row.host === expected.host && row.repo === expected.repo && row.path === expected.path && !row.localPath, `${step}: expected the Git-sourced Agent Plugin row`);
-            } else assert.ok(row.localPath && row.repo.startsWith('_local/'), `${step}: expected local Agent Plugin rows`);
-          }
-          for (const { payload } of recorded.events) {
-            const event = JSON.parse(payload);
-            assert.equal(event.schema_version, 1);
-            assert.equal(event.scope, 'user');
-            assert.ok(['post-install', 'post-update', 'post-uninstall'].includes(event.event));
-            assert.ok(Array.isArray(event.packages) && event.packages.every((item: { name: unknown; reference: unknown }) => typeof item.name === 'string' && (item.reference === null || typeof item.reference === 'string')));
-          }
+      it('every recorded lock parses, every row reads, and each step fired only lifecycle events', () => {
+        for (const [step, recorded] of Object.entries(recording.steps) as [string, RecordedStep][]) {
+          // a user-scope lock may record absolute paths; a project lock may not
+          if (recorded.lock.trim()) for (const row of parseLock(parseYaml(recorded.lock), !step.startsWith('project-'))) assert.ok(!isUnreadable(row), `${step}: ${isUnreadable(row) ? row.reason : ''}`);
+          for (const event of recorded.events) assert.ok(['post-install', 'post-update', 'post-uninstall'].includes(event), `${step}: ${event}`);
         }
       });
 
-      it('runs install, update, reinstall and uninstall from the recorded locks and events', async () => {
-        const { root, home, plugins } = await makeAccount('apm-recorded');
-        try {
-          const locations = { home, plugins };
-          const apmHome = join(home, '.apm');
-          const configDir = join(home, '.config', 'agent-plugin-lifecycle');
-          const configPath = join(configDir, 'config.json');
-          await mkdir(configDir, { recursive: true });
-          await writeFile(configPath, JSON.stringify(lifecycleConfig(plugins)));
-          const options = { home, apmHome, configPath, environment: isolatedEnvironment(home), output: () => undefined };
-          const lock = (step: RecordedStep) => writeFile(join(apmHome, 'apm.lock.yaml'), relocate(step.lock, locations, false));
-          const fire = async (step: RecordedStep) => {
-            for (const { payload } of step.events) assert.equal(await runLifecycle('run', { ...options, event: JSON.parse(relocate(payload, locations, true)) as LifecycleEvent }), 0);
-          };
-          const kept = (plugin: string, ...rest: string[]) => join(apmHome, 'apm_modules', '_local', plugin, ...rest);
-
-          await placeFiles(home, plugins, recording.steps.install.deployed);
-          await lock(recording.steps.install);
-          await fire(recording.steps.install);
-          assert.equal(await readFile(kept(PLUGIN, 'skills', 'greet', 'setup.done'), 'utf8'), home);
-          assert.equal(await readFile(kept(DEPENDENCY, 'skills', 'shout', 'setup.done'), 'utf8'), home);
-          assert.equal(await readFile(kept(PLUGIN, 'installed.marker'), 'utf8'), 'yes');
-          assert.equal(await runLifecycle('check', options), 0);
-
-          await lock(recording.steps.update);
-          await fire(recording.steps.update);
-          assert.equal(await runLifecycle('check', options), 0);
-
-          safeRmSync(kept(PLUGIN, 'skills', 'greet', 'setup.done'));
-          await lock(recording.steps.reinstall);
-          await fire(recording.steps.reinstall);
-          assert.equal(await readFile(kept(PLUGIN, 'skills', 'greet', 'setup.done'), 'utf8'), home);
-          assert.equal(await runLifecycle('check', options), 0);
-
-          for (const gone of recording.steps.install.deployed.filter((path) => !recording.steps.uninstall.deployed.includes(path))) safeRmSync(join(home, ...gone.split('/')));
-          safeRmSync(kept(PLUGIN));
-          await lock(recording.steps.uninstall);
-          await fire(recording.steps.uninstall);
-          assert.equal(await readFile(join(home, 'cleanup.done'), 'utf8'), 'ok');
-          assert.equal(await runLifecycle('check', options), 0);
-        } finally {
-          removeAccount(root);
+      it('APM fires post-install, before post-update, on every update that fires post-update, so one post-install entry runs apl on updates', () => {
+        const updates = Object.entries(recording.steps).filter(([, recorded]) => recorded?.events.includes('post-update'));
+        assert.ok(updates.length > 0, 'the recording has an update that fired post-update');
+        for (const [step, recorded] of updates) {
+          const events = recorded?.events ?? [];
+          assert.ok(events.includes('post-install') && events.indexOf('post-install') < events.indexOf('post-update'), `${step}: ${events.join(', ')}`);
         }
+      });
+
+      it('local plugins at user scope: install asks nothing without a terminal, runs once approved, skips current copies, and reports left copies', async () => {
+        await replayLocal(recording, true);
+      });
+
+      it('local plugins at project scope: the same from the project root', async () => {
+        await replayLocal(recording, false);
       });
 
       for (const [kind, label] of [
-        ['git', 'subfolder'],
-        ['gitroot', 'whole-repository'],
-        ['gitskills', 'plain skill repository'],
+        ['git', 'a plugin in a Git subfolder'],
+        ['gitroot', 'a plugin at a Git repository root'],
+        ['gitskills', 'a plain skill repository'],
       ] as const)
-        it(`runs the Git-sourced ${label} install, update and uninstall from the recorded locks and events`, async function () {
-          const recordedSteps = { git: recording.gitSteps, gitroot: recording.gitRootSteps, gitskills: recording.gitSkillsSteps }[kind] as Record<string, RecordedStep> | undefined;
-          const gitSteps = recordedSteps;
-          if (!gitSteps) return this.skip(); // this recording predates the Git scenario; re-record it (README)
-          const source = recordedGitSource(recording, kind);
-          const { root, home, plugins } = await makeAccount(`apm-recorded-${kind}`);
-          try {
-            const locations = { home, plugins };
-            const apmHome = join(home, '.apm');
-            const configDir = join(home, '.config', 'agent-plugin-lifecycle');
-            const configPath = join(configDir, 'config.json');
-            await mkdir(configDir, { recursive: true });
-            await writeFile(configPath, JSON.stringify(gitLifecycleConfig(source)));
-            const options = { home, apmHome, configPath, environment: isolatedEnvironment(home), output: () => undefined };
-            const lock = (step: RecordedStep) => writeFile(join(apmHome, 'apm.lock.yaml'), relocate(step.lock, locations, false));
-            const fire = async (step: RecordedStep) => {
-              for (const { payload } of step.events) assert.equal(await runLifecycle('run', { ...options, event: JSON.parse(relocate(payload, locations, true)) as LifecycleEvent }), 0);
-            };
-            const kept = (...rest: string[]) => join(apmHome, 'apm_modules', ...source.repo.split('/'), ...(source.path === '.' ? [] : source.path.split('/')), ...rest);
+        it(`${label}: apl finds every copy APM deployed, runs it again after the update, and reports left copies after the uninstall`, async () => {
+          await replayGit(recording, kind);
+        });
 
-            const skillFolders = async (step: RecordedStep): Promise<string[]> => {
-              if (!source.skill) return [];
-              const raw = (parseYaml(step.lock) as { dependencies: { deployed_files?: string[] }[] }).dependencies[0];
-              const folders = new Set<string>();
-              const nativeRoot = (parseYaml(step.lock) as { dependencies: { native_plugin?: { root: string } }[] }).dependencies[0]?.native_plugin?.root;
-              if (nativeRoot && (await exists(join(home, ...nativeRoot.split('/'), 'skills', source.skill)))) folders.add(join(home, ...nativeRoot.split('/'), 'skills', source.skill));
-              for (const file of raw.deployed_files ?? []) {
-                const parts = file.split('/');
-                const index = parts.lastIndexOf('skills');
-                if (index >= 0 && parts[index + 1] === source.skill) folders.add(join(home, ...parts.slice(0, index + 2)));
-              }
-              // APM's kept skill is a destination only when no deployed copy exists
-              return folders.size ? [...folders] : [kept('skills', source.skill)];
-            };
-
-            await placeFiles(home, plugins, gitSteps[`${kind}-install`].deployed);
-            await lock(gitSteps[`${kind}-install`]);
-            await fire(gitSteps[`${kind}-install`]);
-            // the plugin's command runs in its native copy when the lock names one, otherwise in APM's kept copy
-            const nativeOf = (step: RecordedStep) => (parseYaml(step.lock) as { dependencies: { native_plugin?: { root: string } }[] }).dependencies[0]?.native_plugin?.root;
-            const pluginCopy = (step: RecordedStep, ...rest: string[]) => {
-              const native = source.skill ? undefined : nativeOf(step);
-              return native ? join(home, ...native.split('/'), ...rest) : kept(...rest);
-            };
-            if (!source.skill) assert.equal(await readFile(pluginCopy(gitSteps[`${kind}-install`], 'installed.marker'), 'utf8'), 'yes');
-            for (const folder of await skillFolders(gitSteps[`${kind}-install`])) assert.equal(await readFile(join(folder, 'setup.done'), 'utf8'), home, `post-install ran in ${folder}`);
-            assert.equal(await runLifecycle('check', options), 0);
-
-            // a tag source gets post-update (its own commands); a pin source gets post-install again
-            const updated = source.update === 'tag';
-            await placeFiles(home, plugins, gitSteps[`${kind}-update`].deployed);
-            await lock(gitSteps[`${kind}-update`]);
-            await fire(gitSteps[`${kind}-update`]);
-            if (!source.skill) assert.equal(await readFile(pluginCopy(gitSteps[`${kind}-update`], updated ? 'updated.marker' : 'installed.marker'), 'utf8'), 'yes');
-            for (const folder of await skillFolders(gitSteps[`${kind}-update`])) assert.equal(await readFile(join(folder, updated ? 'setup.updated' : 'setup.done'), 'utf8'), home, `the update command ran in ${folder}`);
-            assert.equal(await runLifecycle('check', options), 0);
-
-            for (const gone of gitSteps[`${kind}-update`].deployed.filter((path) => !gitSteps[`${kind}-uninstall`].deployed.includes(path))) safeRmSync(join(home, ...gone.split('/')));
-            assert.equal(gitSteps[`${kind}-uninstall`].lock.trim(), '', 'APM deletes the lock when the last package is removed');
-            safeRmSync(join(apmHome, 'apm.lock.yaml'));
-            assert.equal(await runLifecycle('run', { ...options, event: JSON.parse(relocate(gitSteps[`${kind}-uninstall`].events[0].payload, locations, true)) as LifecycleEvent }), 0);
-            assert.equal(await readFile(join(home, 'cleanup.done'), 'utf8'), 'ok');
-          } finally {
-            removeAccount(root);
-          }
+      for (const [step, label] of [
+        ['claudedir-outside-install', 'outside the home folder'],
+        ['claudedir-home-install', 'inside the home folder, not ~/.claude'],
+      ] as const)
+        it(`CLAUDE_CONFIG_DIR ${label}: apl runs the script in the skill folder APM recorded there, the copy Claude Code loads`, async () => {
+          await replayClaudeDir(recording, step);
         });
     });
   }

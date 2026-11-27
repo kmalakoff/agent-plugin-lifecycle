@@ -1,0 +1,37 @@
+lockfile_version: "4"
+apm_version: 0.39.1
+manifest_targets: []
+dependencies:
+  - repo_url: _local/lifecycle-demo
+    name: lifecycle-demo
+    version: 1.0.0
+    package_type: agent_plugin
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo
+    content_hash: sha256:a5095052d4fc51afadaf73125ef9a00a8bcc7e4a4d7c03794d0d8926832adc93
+    native_plugin:
+      name: lifecycle-demo
+      root: .agents/plugins/lifecycle-demo
+      fingerprint: sha256:a5095052d4fc51afadaf73125ef9a00a8bcc7e4a4d7c03794d0d8926832adc93
+      marketplace:
+        name: apm-p-edbad2d8
+        path: ./.agents/plugins
+    native_declared:
+      - copilot
+  - repo_url: _local/lifecycle-demo-dep
+    name: lifecycle-demo-dep
+    version: 1.0.0
+    package_type: marketplace_plugin
+    source: local
+    local_path: <PLUGINS>/lifecycle-demo-dep
+    content_hash: sha256:78bd87def616abefabf204c1d445e3d692d215616d7de12011293fdab2973a01
+    native_plugin:
+      name: lifecycle-demo-dep
+      root: .agents/plugins/lifecycle-demo-dep
+      fingerprint: sha256:78bd87def616abefabf204c1d445e3d692d215616d7de12011293fdab2973a01
+      marketplace:
+        name: apm-p-edbad2d8
+        path: ./.agents/plugins
+    native_declared:
+      - copilot
+deployments: []

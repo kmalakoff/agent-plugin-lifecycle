@@ -1,5 +1,5 @@
-// Test helper run by APM as a lifecycle script: saves the event JSON APM writes to stdin
-// as <dir>/<NNN>-<event>.json so the live suite can assert on and record the real payload.
+// Test helper run by APM as a lifecycle script: saves the event JSON APM writes to stdin as <dir>/<NNN>-<event>.json;
+// the live suite reads the event names from the file names, in order.
 const { mkdirSync, readdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 
