@@ -100,6 +100,8 @@ interface Session {
   apl: (args: string[], cwd?: string) => Result;
   /** What `apl install`, run by APM's lifecycle entries, printed since the last call. */
   hookOutput: () => Promise<string>;
+  /** The lifecycle events fired since the last snapshot or read. */
+  readEvents: () => Promise<string[]>;
   /** Forgets the events fired since the last snapshot, for a command no step records. */
   discardEvents: () => Promise<void>;
   /** Records the step: the lock, the names of the events fired since the last snapshot and the files under `root`. */
@@ -144,6 +146,12 @@ async function openSession(prefix: string, environment: (account: { home: string
       const fresh = text.slice(hookSeen);
       hookSeen = text.length;
       return fresh;
+    },
+    readEvents: async () => {
+      const files = (await readdir(eventsDir).catch(() => [] as string[])).sort();
+      const fresh = files.slice(eventsSeen);
+      eventsSeen = files.length;
+      return fresh.map((file) => file.replace(/^\d+-/, '').replace(/\.json$/, ''));
     },
     discardEvents: async () => {
       eventsSeen = (await readdir(eventsDir).catch(() => [] as string[])).length;
@@ -241,7 +249,11 @@ function describeLocalScenario(scope: 'user' | 'project'): void {
       assert.deepStrictEqual(step.events, ['post-install']);
       const hook = parseLines(await session.hookOutput());
       assert.deepStrictEqual(folders(hook), copies);
-      for (const line of hook) assert.strictEqual(line.status, ofPlugin(line.id) ? 'ran' : 'current', line.text);
+      for (const line of hook) {
+        // APM recreates project-scope native plugin folders on install (wiping untracked files), so apl re-runs them via the folder stamp.
+        assert.strictEqual(line.status, ofPlugin(line.id) || !user ? 'ran' : 'current', line.text);
+      }
+      for (const copy of copies) assert.ok(existsSync(join(copy, 'installed.marker')) || existsSync(join(copy, 'setup.done')), `the script ran in ${copy}`);
       const status = apl(['status']);
       assert.strictEqual(status.status, 0, `${status.stdout}${status.stderr}`);
     });
@@ -251,11 +263,23 @@ function describeLocalScenario(scope: 'user' | 'project'): void {
       session.apm(['uninstall', ...g, `_local/${PLUGIN}`], root);
       await session.snapshot(uninstallStep, root, lock);
       const status = apl(['status']);
-      assert.strictEqual(status.status, 0, `${status.stdout}${status.stderr}`);
       const lines = parseLines(status.stdout);
       const kept = before.filter((line) => ofPlugin(line.id) && existsSync(line.folder)).map((line) => line.folder);
+      const remaining = before.filter((line) => !ofPlugin(line.id));
       assert.deepStrictEqual(folders(lines.filter((line) => line.status === 'left')), kept.sort());
-      assert.deepStrictEqual(folders(lines.filter((line) => line.status === 'ok')), folders(before.filter((line) => !ofPlugin(line.id))));
+      if (user) {
+        assert.strictEqual(status.status, 0, `${status.stdout}${status.stderr}`);
+        assert.deepStrictEqual(folders(lines.filter((line) => line.status === 'ok')), folders(remaining));
+      } else {
+        // APM also recreates untouched project-scope native plugin folders on uninstall without firing post-install, so apl reports them stale until apl install restores them.
+        assert.strictEqual(status.status, 1, `${status.stdout}${status.stderr}`);
+        assert.deepStrictEqual(folders(lines.filter((line) => line.status === 'stale')), folders(remaining));
+        const restored = apl(['install']);
+        assert.strictEqual(restored.status, 0, `${restored.stdout}${restored.stderr}`);
+        const after = apl(['status']);
+        assert.strictEqual(after.status, 0, `${after.stdout}${after.stderr}`);
+        assert.deepStrictEqual(folders(parseLines(after.stdout).filter((line) => line.status === 'ok')), folders(remaining));
+      }
       console.log(`      APM kept ${kept.length} of the removed plugin's copies (the scripts' markers are files APM did not write)`);
     });
   });
@@ -404,10 +428,9 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
       assert.deepStrictEqual(folders(parseLines(status.stdout)), copies);
     });
 
-    it('a quiet update runs no script', async () => {
-      if (source.update === 'tag') session.apm(['update', '-g', '--yes', ...target]);
-      else session.apm(['install', '-g', ...target]);
-      await session.discardEvents();
+    it('a quiet update runs no script, fires no lifecycle event, and does not restore APM dependency cache', async () => {
+      const result = source.update === 'tag' ? session.apm(['update', '-g', '--yes', ...target]) : session.apm(['install', '-g', ...target]);
+      const events = await session.readEvents();
       const hook = parseLines(await session.hookOutput());
       if (cacheOnly) {
         assert.ok(
@@ -416,6 +439,8 @@ function describeGitScenario(title: string, source: GitSource, steps: { install:
         );
         return;
       }
+      assert.deepStrictEqual(events, [], `quiet update must fire no lifecycle event: ${events.join(', ')}`);
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Restored dependency cache/, 'quiet update must not restore APM cache');
       // APM fires no entry when nothing changed; whatever an entry printed is current
       assert.ok(
         hook.every((line) => line.status === 'current'),
@@ -506,6 +531,70 @@ function describeClaudeDirScenario(where: 'outside' | 'home'): void {
 }
 describeClaudeDirScenario('outside');
 describeClaudeDirScenario('home');
+
+describe(`live APM, two targets (--target claude,codex) and copy recreation (${GIT_SKILLS_SOURCE.repo})`, () => {
+  const source = GIT_SKILLS_SOURCE;
+  let session: Session;
+  before(async function () {
+    skipWithoutApm(this);
+    const problem = unreachablePins(source);
+    if (problem) {
+      if (strict) throw new Error(`${problem} (TEST_APM_STRICT=true)`);
+      console.log(`      skipping this scenario: ${problem}`);
+      this.skip();
+    }
+    session = await openSession('apm-live-two-targets');
+    await session.writeUserManifest(`    - git: ${source.url}.git\n      ref: ${source.pins.first}\n      skills:\n${(source.select ?? []).map((name) => `        - ${name}\n`).join('')}`);
+  });
+  after(() => {
+    if (session) removeAccount(session.root);
+  });
+
+  it('deploys two real copies under one id, runs them with -y, and re-runs a deleted and recreated copy', async () => {
+    session.apm(['install', '-g', '--target', 'claude,codex']);
+    const copies = [join(session.home, '.agents', 'skills', source.skill ?? ''), join(session.home, '.claude', 'skills', source.skill ?? '')].sort();
+    for (const copy of copies) {
+      assert.ok(existsSync(join(copy, 'SKILL.md')), `APM deployed ${copy}`);
+      await writeFile(join(copy, 'apl.json'), GIT_MANIFEST);
+    }
+    const installed = session.apl(['install', '-g', '-y']);
+    assert.strictEqual(installed.status, 0, `${installed.stdout}${installed.stderr}`);
+    assert.deepStrictEqual(
+      parseLines(installed.stdout)
+        .map((line) => [line.status, line.folder])
+        .sort(),
+      copies.map((copy) => ['ran', copy])
+    );
+    assert.strictEqual(session.apl(['status', '-g']).status, 0);
+
+    // deleting one copy and letting APM recreate it at the same revision makes status stale and install re-run that copy alone
+    safeRmSync(copies[1]);
+    session.apm(['install', '-g', '--target', 'claude,codex']);
+    await writeFile(join(copies[1], 'apl.json'), GIT_MANIFEST);
+    const stale = session.apl(['status', '-g']);
+    assert.strictEqual(stale.status, 1, `${stale.stdout}${stale.stderr}`);
+    assert.deepStrictEqual(
+      parseLines(stale.stdout)
+        .map((line) => [line.status, line.folder])
+        .sort(),
+      [
+        ['ok', copies[0]],
+        ['stale', copies[1]],
+      ]
+    );
+    const repaired = session.apl(['install', '-g']);
+    assert.strictEqual(repaired.status, 0, `${repaired.stdout}${repaired.stderr}`);
+    assert.deepStrictEqual(
+      parseLines(repaired.stdout)
+        .map((line) => [line.status, line.folder])
+        .sort(),
+      [
+        ['current', copies[0]],
+        ['ran', copies[1]],
+      ]
+    );
+  });
+});
 
 const provenanceOf = (source: GitSource) => ({ url: source.url, path: source.path, skill: source.skill, select: source.select, update: source.update, target: source.target, first: source.pins.first, second: source.pins.second });
 

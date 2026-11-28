@@ -3,12 +3,12 @@ import { cannotRun, findCopies } from './copies.ts';
 import { message } from './lib/errors.ts';
 import { resolveOptions } from './lib/options.ts';
 import { runScript } from './lib/run.ts';
-import { isCurrent, readState, updateState } from './state.ts';
+import { computeStamp, isCurrent, readState, updateState } from './state.ts';
 import type { ApprovalRequest, CopyResult, InstallOptions } from './types.ts';
 
 /**
  * Runs the `install` script of every copy approved in its place and not already current, asking `approve` first, once per id and command.
- * A copy from APM is current when its last successful run had the same command and revision; a named folder always runs.
+ * A copy from APM is current when its last successful run matches its command and stamp; a named folder always runs.
  */
 export async function install(options: InstallOptions = {}): Promise<CopyResult[]> {
   const { home, apmHome, cwd, environment, global, folders } = resolveOptions(options);
@@ -45,7 +45,8 @@ export async function install(options: InstallOptions = {}): Promise<CopyResult[
       done({ status: 'unapproved', id, folder });
       continue;
     }
-    if (revision !== undefined && isCurrent(state.runs[folder], install, revision)) {
+    const run = state.runs[folder];
+    if (revision !== undefined && run && isCurrent(run, install, await computeStamp(folder, revision))) {
       done({ status: 'current', id, folder });
       continue;
     }
@@ -59,8 +60,9 @@ export async function install(options: InstallOptions = {}): Promise<CopyResult[
       done({ status: 'failed', id, folder, reason: message(failure) });
       continue;
     }
+    const stamp = await computeStamp(folder, revision);
     await updateState(home, (value) => {
-      value.runs[folder] = { id, install, ...(revision === undefined ? {} : { revision }), ...(lock === undefined ? {} : { lock }) };
+      value.runs[folder] = { id, install, stamp, ...(lock === undefined ? {} : { lock }) };
     });
     done({ status: 'ran', id, folder });
   }

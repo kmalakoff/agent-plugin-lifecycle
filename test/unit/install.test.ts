@@ -2,10 +2,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import assert from 'assert';
+import { safeRmSync } from 'fs-remove-compat';
 import { parse as parseYaml, stringify } from 'yaml';
 import { readApprovals } from '../../src/approvals.ts';
 import { install } from '../../src/install.ts';
-import { readState } from '../../src/state.ts';
+import { readState, updateState } from '../../src/state.ts';
 import type { ApprovalRequest, CopyResult } from '../../src/types.ts';
 import { isolatedEnvironment, makeAccount, newestRecording, placeStep, recordedStep, removeAccount } from '../lib/apm-live.ts';
 import { scratch } from '../lib/scratch.ts';
@@ -65,7 +66,11 @@ describe('install (named folders)', () => {
     const results = await install({ ...options(), approve: async () => assert.fail('nothing to ask for a'), folders: ['a'] });
     assert.deepStrictEqual(results, [{ status: 'ran', id: a, folder: a }]);
     assert.strictEqual(await readFile(join(a, 'runs'), 'utf8'), 'xx');
-    assert.deepStrictEqual((await readState(home)).runs[a], { id: a, install: count('runs') });
+    const record = (await readState(home)).runs[a];
+    assert.deepStrictEqual(Object.keys(record).sort(), ['id', 'install', 'stamp']);
+    assert.strictEqual(record.id, a);
+    assert.strictEqual(record.install, count('runs'));
+    assert.match(record.stamp ?? '', /^sha256:[0-9a-f]{64}$/);
   });
 
   it('an approved named folder stays approved when named from another folder', async () => {
@@ -213,5 +218,97 @@ describe('install (a recorded user lock with two copies of one skill)', () => {
       copies.map((folder) => ({ status: 'failed', folder, reason: `copies of ${shout[0].id} disagree on install` }))
     );
     assert.ok(!asked.some((id) => id.endsWith(':skills/shout')));
+  });
+});
+
+describe('install (per-copy revisions, recreated copies, and 0.3.0 state records)', () => {
+  it('keeps sibling skills current when only one changes, re-runs a recreated copy, and re-runs a 0.3.0 record without stamp once', async () => {
+    const account = await makeAccount('install-per-copy');
+    try {
+      const { root, home } = account;
+      const env = isolatedEnvironment(home);
+      const alpha = join(home, '.agents', 'skills', 'alpha');
+      const beta = join(home, '.agents', 'skills', 'beta');
+      await mkdir(alpha, { recursive: true });
+      await mkdir(beta, { recursive: true });
+      await writeFile(join(alpha, 'apl.json'), JSON.stringify({ scripts: { install: count('runs') } }));
+      await writeFile(join(beta, 'apl.json'), JSON.stringify({ scripts: { install: count('runs') } }));
+      const writeLock = async (commit: string, alphaHash: string) => {
+        await mkdir(join(home, '.apm'), { recursive: true });
+        await writeFile(
+          join(home, '.apm', 'apm.lock.yaml'),
+          stringify({
+            lockfile_version: '4',
+            dependencies: [
+              {
+                repo_url: 'team/skills',
+                host: 'github.com',
+                resolved_commit: commit,
+                deployed_files: ['.agents/skills/alpha', '.agents/skills/alpha/SKILL.md', '.agents/skills/alpha/apl.json', '.agents/skills/beta', '.agents/skills/beta/SKILL.md', '.agents/skills/beta/apl.json'],
+                deployed_file_hashes: {
+                  '.agents/skills/alpha/SKILL.md': alphaHash,
+                  '.agents/skills/alpha/apl.json': 'sha256:aaa',
+                  '.agents/skills/beta/SKILL.md': 'sha256:bbb',
+                  '.agents/skills/beta/apl.json': 'sha256:ccc',
+                },
+                skill_subset: ['alpha', 'beta'],
+              },
+            ],
+          })
+        );
+      };
+      const sha1 = '1111111111111111111111111111111111111111';
+      const sha2 = '2222222222222222222222222222222222222222';
+      await writeLock(sha1, 'sha256:v1');
+
+      const first = await install({ home, cwd: root, global: true, environment: env, approve: async () => true });
+      assert.deepStrictEqual(
+        first.map(({ status }) => status),
+        ['ran', 'ran']
+      );
+
+      // new repository commit where only alpha's hash changed: alpha runs, beta stays current
+      await writeLock(sha2, 'sha256:v2');
+      const partial = await install({ home, cwd: root, global: true, environment: env });
+      assert.deepStrictEqual(
+        partial.map(({ status, folder }) => [status, folder]),
+        [
+          ['ran', alpha],
+          ['current', beta],
+        ]
+      );
+      assert.strictEqual(await readFile(join(alpha, 'runs'), 'utf8'), 'xx');
+      assert.strictEqual(await readFile(join(beta, 'runs'), 'utf8'), 'x');
+
+      // deleting and recreating beta at the same revision re-runs beta because its folder identity changed
+      safeRmSync(beta);
+      await mkdir(beta, { recursive: true });
+      await writeFile(join(beta, 'apl.json'), JSON.stringify({ scripts: { install: count('runs') } }));
+      const recreated = await install({ home, cwd: root, global: true, environment: env });
+      assert.deepStrictEqual(
+        recreated.map(({ status, folder }) => [status, folder]),
+        [
+          ['current', alpha],
+          ['ran', beta],
+        ]
+      );
+      assert.strictEqual(await readFile(join(beta, 'runs'), 'utf8'), 'x');
+
+      // a legacy 0.3.0 state record (revision, no stamp) runs once more and writes a stamp
+      await updateState(home, (state) => {
+        state.runs[alpha] = { id: 'github.com/team/skills:skills/alpha', install: count('runs'), revision: sha2, lock: join(home, '.apm', 'apm.lock.yaml') };
+      });
+      const upgraded = await install({ home, cwd: root, global: true, environment: env });
+      assert.deepStrictEqual(
+        upgraded.map(({ status, folder }) => [status, folder]),
+        [
+          ['ran', alpha],
+          ['current', beta],
+        ]
+      );
+      assert.match((await readState(home)).runs[alpha].stamp ?? '', /^sha256:[0-9a-f]{64}$/);
+    } finally {
+      removeAccount(account.root);
+    }
   });
 });

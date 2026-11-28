@@ -2,6 +2,19 @@
 
 All notable changes to agent-plugin-lifecycle are documented here.
 
+## [0.3.1] - 2026-11-27
+
+### Fixed
+
+- Changing one skill in a repository of skills now re-runs only that skill (using the per-file hashes APM records in `deployed_file_hashes`), leaving unchanged sibling skills `current`.
+- A copy folder that APM (or another installer) deleted and re-created now runs its script again (`apl status` reports it `stale` until `apl install` runs).
+- Fewer `skipped` lines: unselected skills in a repository installed with APM's `skills` filter (`skill_subset`) are no longer reported `skipped`.
+
+### Changed
+
+- Upgrading from 0.3.0: the first `apl install` runs each approved script once more to record the copy stamp (until then `apl status` reports approved copies as `stale`).
+- At project scope, APM re-creates native plugin folders on every `apm install` (so `apl` runs their scripts again each time) and on `apm uninstall` without firing `post-install` (leaving remaining native plugins `stale` until `apl install`).
+
 ## [0.3.0] - 2026-11-26
 
 A clean break: scripts now ship with the plugin or skill, and the machine owner approves them.

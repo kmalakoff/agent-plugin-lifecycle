@@ -35,6 +35,7 @@ jobs:
       - run: apm --version
       - id: deps
         run: npm ci
+      - run: npm run prepublishOnly
       - run: npm run test:apm
         env:
           TEST_APM_STRICT: "true"

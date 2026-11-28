@@ -1,13 +1,18 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { APL_DIR, STATE_FILE } from './constants.ts';
 import { isRecord } from './lib/object.ts';
 import { readStore, updateStore } from './lib/store.ts';
 
-/** The last successful run of `install` in one copy. `revision` and `lock` come from APM's lock and are absent for a named folder. */
+/** The last successful run of `install` in one copy. `lock` comes from APM's lock and is absent for a named folder. */
 export interface Run {
   id: string;
   install: string;
+  /** Digest of the copy's content revision and its folder's inode and creation time; absent in 0.3.0 records (which re-run once). */
+  stamp?: string;
+  /** Legacy 0.3.0 field, still read so old records parse. */
   revision?: string;
   lock?: string;
 }
@@ -22,15 +27,23 @@ export function parseState(value: Record<string, unknown>): State {
   for (const [folder, entry] of Object.entries(runs)) {
     const run = entry as Partial<Run> | null;
     const optional = (field: unknown) => field === undefined || typeof field === 'string';
-    if (!isRecord(run) || typeof run.id !== 'string' || typeof run.install !== 'string' || !optional(run.revision) || !optional(run.lock)) throw new Error(`run record for ${folder} must have id and install strings`);
+    if (!isRecord(run) || typeof run.id !== 'string' || typeof run.install !== 'string' || !optional(run.stamp) || !optional(run.revision) || !optional(run.lock)) throw new Error(`run record for ${folder} must have id and install strings`);
   }
   return { runs: runs as Record<string, Run> };
 }
 const empty = (): State => ({ runs: {} });
 
-/** The copy's record matches its command and revision; a named folder has no revision on either side. */
-export function isCurrent(run: Run | undefined, install: string, revision: string | undefined): boolean {
-  return !!run && run.install === install && run.revision === revision;
+/** Digest of the copy's content revision and its folder's inode and creation time; changes when files change or the folder is re-created. */
+export async function computeStamp(folder: string, revision?: string): Promise<string> {
+  const info = await stat(folder, { bigint: true });
+  return `sha256:${createHash('sha256')
+    .update(JSON.stringify([revision ?? null, info.ino.toString(), info.birthtimeNs.toString()]))
+    .digest('hex')}`;
+}
+
+/** The copy's record matches its command and stamp. */
+export function isCurrent(run: Run | undefined, install: string, stamp: string): boolean {
+  return !!run && run.install === install && run.stamp !== undefined && run.stamp === stamp;
 }
 
 export function readState(home: string): Promise<State> {

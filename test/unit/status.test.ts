@@ -1,6 +1,7 @@
 import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import assert from 'assert';
+import { safeRmSync } from 'fs-remove-compat';
 import { install } from '../../src/install.ts';
 import { status } from '../../src/status.ts';
 import { isolatedEnvironment, removeAccount } from '../lib/apm-live.ts';
@@ -29,5 +30,12 @@ describe('status (named folders)', () => {
     assert.deepStrictEqual(await status(options()), [{ status: 'unapproved', id: copy, folder: copy }]);
     await install({ ...options(), approve: async () => true });
     assert.deepStrictEqual(await status(options()), [{ status: 'ok', id: copy, folder: copy }]);
+  });
+
+  it('reports stale when a named folder is deleted and recreated at the same path', async () => {
+    safeRmSync(copy);
+    await mkdir(copy);
+    await writeFile(join(copy, 'apl.json'), JSON.stringify({ scripts: { install: 'node -e ""' } }));
+    assert.deepStrictEqual(await status(options()), [{ status: 'stale', id: copy, folder: copy }]);
   });
 });

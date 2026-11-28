@@ -3,7 +3,7 @@
 Lets an agent plugin or skill ship its own setup command, and runs it on your machine only after you approve it. The author puts an `apl.json` beside the plugin or skill:
 
 ```json
-{ "scripts": { "install": "npm ci --no-bin-links" } }
+{ "scripts": { "install": "npm ci" } }
 ```
 
 An installer puts one copy of a plugin or skill in the folder of each agent harness (the agent tool that loads it, such as Claude Code, Copilot or Codex). The `apl` command finds each of those copies, asks you once per project (or once for your user install) whether to run the command, and runs it in each copy. After that, Agent Package Manager (APM) can call `apl install` after every install and update, so approved scripts run on their own and a changed plugin runs again once. Nothing runs that you have not approved, and you are asked again when the command changes ([Security model](#security-model)).
@@ -44,8 +44,9 @@ Rules for the command:
 
 - It runs through the platform shell (`sh`, or `cmd.exe` on Windows), exactly as written, with the folder that holds `apl.json` as its working directory. Write it for both shells if your users run both, or call a script: `node setup.js`.
 - Standard input is closed. Its output, standard output included, goes to `apl`'s standard error.
-- Make it safe to repeat, as `npm ci` and `uv sync` are. It runs again in each copy when the plugin changes or a copy is recreated.
-- For npm in a plugin copy use `npm ci --no-bin-links`. APM refuses later installs of a copy that contains a symlink, and `node_modules/.bin` would add one.
+- Make it safe to repeat, as `npm ci` and `uv sync` are. It runs again in each copy when that copy's files change or the copy is recreated.
+- For npm in a **native plugin copy** (`.agents/plugins/<name>/`), use `npm ci --no-bin-links`: APM refuses later installs of a plugin copy that contains a symlink, and `node_modules/.bin` would add one. Plain skill copies (`.agents/skills/<name>/`, `.claude/skills/<name>/`) work with standard `npm ci`.
+- For a skill with a nested package, chain commands cleanly (for example `npm ci && npm ci --prefix scripts`) or call a script (`node setup.js`).
 - Do not put `apl.json` under `.apm/`, which APM strips from deployed copies. An `apl.json` at the root of a repository of plain skills reaches no skill copy, only APM's cache, so it is reported `skipped` and never runs; put it in each `skills/<name>/`.
 - Changing the command makes every user approve it again.
 
@@ -82,9 +83,12 @@ lifecycle:
       timeoutSec: 300
 ```
 
-- **`timeoutSec`**: APM kills a lifecycle command after 30 seconds unless the entry sets `timeoutSec`, and still exits 0. One `apl install` runs every script that is due, so allow time for all of them.
+- **`timeoutSec` and output limit**: APM kills a lifecycle command after 30 seconds unless the entry sets `timeoutSec`, and also kills a command whose output exceeds 1 MiB per stream — exiting 0 either way. One `apl install` runs every script that is due, so allow time for all of them.
 - **Secrets**: APM removes environment variables whose names look like credentials (`NPM_TOKEN`, `*_API_KEY`, `*_PASSWORD` and similar) from lifecycle commands. If a script needs one, list it on the entry: `allowedEnvVars: [NPM_TOKEN]`.
 - APM writes the command's output to `~/.apm/logs/scripts.log`, not to your terminal.
+- At project scope, APM re-creates native plugin folders on `apm install` (so their scripts run again each time) and on `apm uninstall` without firing `post-install` (leaving remaining native plugins `stale` until `apl install`).
+
+In a script or scheduled job, you can leave out APM's lifecycle entry and run `apl install` (or `apl install -g`) yourself after `apm`: `apl`'s lines and exit code then reach the job directly, and APM's time limit and 1 MiB output limit do not apply.
 
 Check the registration: `apm lifecycle` lists the entry (`post-install | command | apl install | user`).
 
@@ -99,7 +103,7 @@ That is `apl` reporting a script waiting for your approval. Run `apl install` yo
 ```console
 $ apl install
 github.com/team/skills:skills/report wants to run
-  install: npm ci --no-bin-links
+  install: npm ci
 in
   /Users/me/project/.agents/skills/report
   /Users/me/project/.claude/skills/report
@@ -126,7 +130,7 @@ The skills CLI has no install hook, so you run `apl` on the folders it creates. 
 $ npx skills add team/skills --skill report -a claude-code -a codex
 $ apl install .agents/skills/report .claude/skills/report
 /Users/me/project/.agents/skills/report wants to run
-  install: npm ci --no-bin-links
+  install: npm ci
 in
   /Users/me/project/.agents/skills/report
 Run it? [y/N] y
@@ -152,7 +156,7 @@ For Claude Code, Codex, a skill you copied, or any other installer, name the fol
 - **You approve the exact command.** The question shows the command text, and a changed command is asked again.
 - **An approval belongs to one place:** one project, your user install, or one named folder. As in npm, where `allowScripts` belongs to the project being installed, approving a skill in one project approves it nowhere else.
 - **Approvals are stored per user in `~/.apl`, never in the project.** This is APM's rule for its own lifecycle trust: a file in the project could be committed by its author, so a cloned project could approve its own scripts. Also, `apl.json` ships inside each plugin or skill, so a project has no `apl` file of its own, where npm has `package.json`.
-- **`~/.apl` must be yours.** On macOS and Linux, `apl` stops (exit 2) when `~/.apl` or a file in it is not owned by you or is writable by group or others, as OpenSSH does for `~/.ssh`. Fix it with `chmod go-w`.
+- **`~/.apl` must be yours.** On macOS and Linux, `apl` stops (exit 2) when `~/.apl` or a file in it is not owned by you or is writable by group or others, as OpenSSH does for `~/.ssh`. Fix it with `chmod go-w`. Windows is not checked, because Node cannot read a file's owner or access list there (pip and GnuPG skip it for the same reason); `apl` relies on the protection Windows gives your profile folder.
 - **Nothing is approved silently.** When APM runs `apl` there is no terminal, so `apl` asks nothing and runs only what is already approved. `-y` is the one explicit way to approve without a question.
 - **`-y` approves everything unapproved at that moment, and saves it.** When an agent runs `apl install -y`, the agent approves for you: keep that command on ask in your agent's permissions, or run `apl install` yourself in a terminal.
 - **Approval covers the command, not the version or the files it runs.** npm pins an approval to the version by default; `apl` does not pin the revision, because APM's run cannot ask: an update with the same command runs without a question. A new version can also change what `npm ci` installs without changing the command.
@@ -219,7 +223,7 @@ A script runs only when `~/.apl/approvals.json` holds, under the copy's place, t
   "approvals": {
     "/Users/me/project": {
       "github.com/team/skills:skills/report": {
-        "scripts": { "install": "npm ci --no-bin-links" },
+        "scripts": { "install": "npm ci" },
         "approved": "2026-11-26T20:15:00.000Z"
       }
     }
@@ -229,7 +233,11 @@ A script runs only when `~/.apl/approvals.json` holds, under the copy's place, t
 
 Answering anything but `y` saves nothing, and you are asked again next time. A script you never want stays `unapproved`: uninstall the plugin, or accept that `apl status` exits 1. To revoke an approval, delete its entry. Approvals belong to you and are never read from a project.
 
-`~/.apl/state.json` records the last successful run in each copy (command, and the revision APM locked), so a copy that is already current is skipped. The record is removed while a script runs, so a failed or killed run leaves the copy `missing`. Both files are private to you (`0700` folder, `0600` files on macOS and Linux).
+`~/.apl/state.json` records the last successful run in each copy (command and a stamp of the copy's files and folder identity), so a copy that is already current is skipped and changing one skill in a repository does not re-run its siblings. The record is removed while a script runs, so a failed or killed run leaves the copy `missing`. If a copy's packages break (a Node upgrade, files removed by hand), run the command in that folder yourself, or delete `~/.apl/state.json` and run `apl install`: every approved script then runs once more. Both files are private to you (`0700` folder, `0600` files on macOS and Linux).
+
+### Running as another user
+
+Run `apl` as the account whose `~/.apl` it uses. Running as root with another account's `HOME` leaves a root-owned `~/.apl` there, which that user's `apl` will refuse.
 
 ## Commands
 
@@ -245,12 +253,12 @@ apl --version | -v
 | `-g`, `--global` | The user scope (`~/.apm`) instead of the project in the current folder, as with APM's `-g`. Not allowed with folders. |
 | `-y`, `--yes` | `install` only: approve every unapproved script without asking, and save the approvals. |
 
-`apl install` asks only when standard input and output are a terminal. It prints one line per copy, each as soon as its result is known (so it follows its script's output, and a run APM kills still shows what finished), or `nothing installed`. Standard output holds only these lines; scripts print to standard error.
+`apl install` asks only when standard input and output are a terminal. Run one `apl install` at a time; `apl` does not guard against two running in the same copies. It prints one line per copy, each as soon as its result is known (so it follows its script's output, and a run APM kills still shows what finished), or `nothing installed`. Standard output holds only these lines; scripts print to standard error.
 
 | Line | Meaning |
 |---|---|
 | `ran <id> <folder>` | The script succeeded and the run was recorded. |
-| `current <id> <folder>` | Already succeeded for this command and revision; skipped. |
+| `current <id> <folder>` | Already succeeded for this command and copy; skipped. |
 | `unapproved <id> <folder>` | Not approved; not run. |
 | `failed <id> <folder>: <reason>` | The script exited non-zero, `apl.json` is invalid, the folder links outside the scope, copies of the id disagree on the command, a lock row cannot be used, or a named folder has no `apl.json` or no `scripts.install`. |
 | `skipped <id> <folder>: <reason>` | APM's cache is the only copy; scripts do not run there. |
@@ -259,9 +267,9 @@ apl --version | -v
 
 | Line | Meaning |
 |---|---|
-| `ok <id> <folder>` | The current command succeeded here for the installed revision. |
+| `ok <id> <folder>` | The current command succeeded here for the installed copy. |
 | `missing <id> <folder>` | Approved, but it has not succeeded here. |
-| `stale <id> <folder>` | It last succeeded for an older revision or an older command. |
+| `stale <id> <folder>` | It last succeeded for older files, an older command, or a recreated folder. |
 | `unapproved <id> <folder>` | The command is not approved. |
 | `failed <id> <folder>: <reason>` | `apl.json` is invalid, the folder links outside the scope, copies of the id disagree on the command, a lock row cannot be used, or a named folder has no `apl.json` or no `scripts.install`. |
 | `skipped <id> <folder>: <reason>` | APM's cache is the only copy; scripts do not run there. |

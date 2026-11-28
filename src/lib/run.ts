@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { crossSpawn } from 'cross-spawn-cb';
 
 /** Runs a command string through the platform shell, as written, in `cwd`; standard input is closed and all its output goes to our standard error. */
 export function runScript(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
@@ -11,7 +11,7 @@ export function runScript(command: string, cwd: string, env: NodeJS.ProcessEnv):
       else resolve();
     };
     // our standard output holds only apl's result lines
-    const child = spawn(command, { shell: true, cwd, env, stdio: ['ignore', 2, 'inherit'] });
+    const child = crossSpawn(command, [], { shell: true, cwd, env, stdio: ['ignore', 2, 'inherit'] });
     child.on('error', settle);
     child.on('close', (code, signal) => {
       if (signal) settle(new Error(`killed by ${signal}`));

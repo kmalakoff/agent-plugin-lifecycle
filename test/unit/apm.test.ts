@@ -43,13 +43,41 @@ describe('parseLock', () => {
     for (const row of rows) assert.match(row.revision, /^sha256:[0-9a-f]{64}$/);
   });
 
-  it('reads a Git row: host, repository, revision as commit and content hash, deployed skill files', () => {
+  it('reads a Git row: host, repository, revision, deployed skill files, file hashes and skill_subset', () => {
     const [row] = readable(parseLock(parseYaml(recordedStep(recording, 'gitskills-install').lock)));
     assert.strictEqual(row.host, 'github.com');
     assert.strictEqual(row.repo, 'vercel-labs/skills');
     assert.strictEqual(row.path, '.');
     assert.match(row.revision, /^[0-9a-f]{40}:sha256:[0-9a-f]{64}$/);
     assert.ok(row.deployedFiles.includes('.agents/skills/find-skills/SKILL.md'));
+    assert.ok(row.deployedFileHashes?.['.agents/skills/find-skills/SKILL.md']?.startsWith('sha256:'));
+    assert.deepStrictEqual(row.skillSubset, ['find-skills']);
+  });
+
+  it('reads an SSH skill_bundle row (no .git, no ssh://) with host and repo_url as APM writes it', () => {
+    const [row] = readable(
+      parseLock({
+        dependencies: [
+          {
+            repo_url: 'kmalakoff/kevin-skills',
+            name: 'kevin-skills',
+            host: 'git.fleet.test',
+            resolved_commit: '456a8f7a29523524fb445e473696eb187b84ddc1',
+            package_type: 'skill_bundle',
+            deployed_files: ['.agents/skills/backup-cloud', '.agents/skills/backup-cloud/SKILL.md', '.agents/skills/backup-cloud/apl.json'],
+            deployed_file_hashes: {
+              '.agents/skills/backup-cloud/SKILL.md': 'sha256:1111',
+              '.agents/skills/backup-cloud/apl.json': 'sha256:2222',
+            },
+            skill_subset: ['backup-cloud'],
+          },
+        ],
+      })
+    );
+    assert.strictEqual(row.host, 'git.fleet.test');
+    assert.strictEqual(row.repo, 'kmalakoff/kevin-skills');
+    assert.strictEqual(row.revision, '456a8f7a29523524fb445e473696eb187b84ddc1');
+    assert.deepStrictEqual(row.skillSubset, ['backup-cloud']);
   });
 
   it('adds a non-default port to the host, as APM names such a source', () => {
@@ -170,19 +198,81 @@ describe('packageFolders, on recorded locks', () => {
 
   it('each folder APM recorded in deployed_files is a skill copy at skills/<its name>, bounded by the scope root; recorded files are not folders; the cache root no folder carries', async () => {
     const [row] = rows(recordedStep(recording, 'gitskills-install').lock);
+    const result = await packageFolders(row, user());
     // the cache's own skills/find-skills is carried by the deployed copy; its root is carried by no recorded folder
-    assert.deepStrictEqual(await packageFolders(row, user()), {
-      folders: [{ folder: join(home(), '.agents', 'skills', 'find-skills'), within: 'skills/find-skills', bound: home() }],
-      cache: [{ folder: join(home(), '.apm', 'apm_modules', 'vercel-labs', 'skills'), within: '' }],
-    });
+    assert.strictEqual(result.folders.length, 1);
+    assert.strictEqual(result.folders[0].folder, join(home(), '.agents', 'skills', 'find-skills'));
+    assert.strictEqual(result.folders[0].within, 'skills/find-skills');
+    assert.strictEqual(result.folders[0].bound, home());
+    assert.match(result.folders[0].revision ?? '', /^sha256:[0-9a-f]{64}$/);
+    assert.deepStrictEqual(result.cache, [{ folder: join(home(), '.apm', 'apm_modules', 'vercel-labs', 'skills'), within: '' }]);
+  });
+
+  it('derives per-copy revision from deployed_file_hashes and filters unselected cache skills via skill_subset', async () => {
+    const cacheBase = join(home(), '.apm', 'apm_modules', 'team', 'skills');
+    await mkdir(join(cacheBase, 'skills', 'alpha'), { recursive: true });
+    await mkdir(join(cacheBase, 'skills', 'beta'), { recursive: true });
+    await mkdir(join(cacheBase, 'skills', 'unselected'), { recursive: true });
+    const makeRow = (alphaHash: string) =>
+      readable(
+        parseLock({
+          dependencies: [
+            {
+              repo_url: 'team/skills',
+              host: 'github.com',
+              resolved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              deployed_files: ['.agents/skills/alpha', '.agents/skills/alpha/SKILL.md', '.agents/skills/alpha/apl.json', '.agents/skills/beta', '.agents/skills/beta/SKILL.md'],
+              deployed_file_hashes: {
+                '.agents/skills/alpha/SKILL.md': alphaHash,
+                '.agents/skills/alpha/apl.json': 'sha256:aaa',
+                '.agents/skills/beta/SKILL.md': 'sha256:bbb',
+              },
+              skill_subset: ['alpha', 'beta'],
+            },
+          ],
+        })
+      )[0];
+    const first = await packageFolders(makeRow('sha256:111'), user());
+    const second = await packageFolders(makeRow('sha256:222'), user());
+    assert.notStrictEqual(first.folders[0].revision, second.folders[0].revision, 'changed skill gets a new per-copy revision');
+    assert.strictEqual(first.folders[1].revision, second.folders[1].revision, 'unchanged sibling skill keeps its per-copy revision');
+    // unselected skill in apm_modules is excluded by skill_subset, while the package root remains checked
+    assert.deepStrictEqual(first.cache, [{ folder: cacheBase, within: '' }]);
+
+    // unusable deployed_file_hashes or skill_subset values are ignored (row revision fallback, no filter), never an error
+    const [loose] = readable(
+      parseLock({
+        dependencies: [
+          {
+            repo_url: 'team/skills',
+            host: 'github.com',
+            resolved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            deployed_files: ['.agents/skills/alpha', '.agents/skills/alpha/SKILL.md'],
+            deployed_file_hashes: { '.agents/skills/alpha/SKILL.md': 123 },
+            skill_subset: 'not-an-array',
+          },
+        ],
+      })
+    );
+    assert.strictEqual(loose.deployedFileHashes, undefined);
+    assert.strictEqual(loose.skillSubset, undefined);
+    const looseFolders = await packageFolders(loose, user());
+    assert.strictEqual(looseFolders.folders[0].revision, undefined);
+    assert.ok(looseFolders.cache.some((entry) => entry.within === 'skills/unselected'));
   });
 
   it('a folder APM recorded under a moved CLAUDE_CONFIG_DIR: absolute outside the home (no bound), relative inside it', async () => {
     const outsideStep = recordedStep(recording, 'claudedir-outside-install');
     const [outside] = rows(outsideStep.lock);
-    assert.deepStrictEqual((await packageFolders(outside, user())).folders, [{ folder: join(dir, 'outside', 'claude', 'skills', 'find-skills'), within: 'skills/find-skills' }]);
+    assert.deepStrictEqual(
+      (await packageFolders(outside, user())).folders.map(({ folder, within, bound }) => ({ folder, within, bound })),
+      [{ folder: join(dir, 'outside', 'claude', 'skills', 'find-skills'), within: 'skills/find-skills', bound: undefined }]
+    );
     const [inside] = rows(recordedStep(recording, 'claudedir-home-install').lock);
-    assert.deepStrictEqual((await packageFolders(inside, user())).folders, [{ folder: join(home(), 'config', 'claude', 'skills', 'find-skills'), within: 'skills/find-skills', bound: home() }]);
+    assert.deepStrictEqual(
+      (await packageFolders(inside, user())).folders.map(({ folder, within, bound }) => ({ folder, within, bound })),
+      [{ folder: join(home(), 'config', 'claude', 'skills', 'find-skills'), within: 'skills/find-skills', bound: home() }]
+    );
     // the same absolute path is refused in a project lock
     assert.throws(() => rows(outsideStep.lock, false), /deployed_files\[0\] contains an unsafe path segment/);
   });
@@ -193,13 +283,15 @@ describe('packageFolders, on recorded locks', () => {
     await writeFile(join(project, '.agents', 'plugins', 'lifecycle-demo', 'skills', 'README.md'), '');
     const scope = { global: false, lock: join(project, 'apm.lock.yaml'), root: project, manifestRoot: project, modules: join(project, 'apm_modules') };
     const [demo] = rows(recordedStep(recording, 'project-install').lock, false);
-    assert.deepStrictEqual(await packageFolders(demo, scope), {
-      folders: [
+    const nativeResult = await packageFolders(demo, scope);
+    assert.deepStrictEqual(
+      nativeResult.folders.map(({ folder, within, bound }) => ({ folder, within, bound })),
+      [
         { folder: join(project, '.agents', 'plugins', 'lifecycle-demo'), within: '', bound: project },
         { folder: join(project, '.agents', 'plugins', 'lifecycle-demo', 'skills', 'greet'), within: 'skills/greet', bound: project },
-      ],
-      cache: [],
-    });
+      ]
+    );
+    assert.deepStrictEqual(nativeResult.cache, []);
     // commit-commands for copilot: only prompt files are recorded, so the cache is the package's only copy
     const [commands] = rows(recordedStep(recording, 'git-install').lock);
     assert.deepStrictEqual(await packageFolders(commands, user()), {

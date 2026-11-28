@@ -149,11 +149,11 @@ export async function findCopies(options: FindOptions): Promise<Found> {
     }
     const base = packageId(item, scope.manifestRoot);
     const { folders: recorded, cache } = await packageFolders(item, scope);
-    for (const { folder, within, bound } of recorded) {
+    for (const { folder, within, bound, revision } of recorded) {
       if (named.has(folder)) continue;
       named.add(folder);
       const copy = await inspect(copyId(base, within), folder, bound, cacheRoot, place);
-      if (copy) copies.push({ ...copy, revision: item.revision, lock: scope.lock });
+      if (copy) copies.push({ ...copy, revision: revision ?? item.revision, lock: scope.lock });
     }
     for (const { folder, within } of cache) {
       if (named.has(folder)) continue;

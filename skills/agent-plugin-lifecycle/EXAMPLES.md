@@ -13,7 +13,7 @@ The plugin `plugins/notes` has an MCP server in `server/` with its own `package.
 `plugins/notes/skills/notes-search/apl.json` (runs in each copy of the skill):
 
 ```json
-{ "scripts": { "install": "npm ci --no-bin-links" } }
+{ "scripts": { "install": "npm ci" } }
 ```
 
 The owner's first install, from the project root:

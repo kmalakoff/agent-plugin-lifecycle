@@ -164,8 +164,8 @@ export function removeAccount(root: string): void {
 /** The folder of the project-scope scenarios inside the account home. */
 export const PROJECT = 'project';
 
-/** The `apl.json` the Git scenarios add to each copy APM deployed (the public repositories ship none); the script leaves `apl.marker`. */
-export const GIT_MANIFEST = `${JSON.stringify({ scripts: { install: `node -e "require('fs').writeFileSync('apl.marker','yes')"` } })}\n`;
+/** The `apl.json` the Git scenarios add to each copy APM deployed (the public repositories ship none); the script creates `node_modules/ok` and `apl.marker`. */
+export const GIT_MANIFEST = `${JSON.stringify({ scripts: { install: `node -e "const f=require('fs');f.mkdirSync('node_modules',{recursive:true});f.writeFileSync('node_modules/ok','yes');f.writeFileSync('apl.marker','yes')"` } })}\n`;
 
 export function deepShape(value: unknown): unknown {
   if (value === null) return 'null';

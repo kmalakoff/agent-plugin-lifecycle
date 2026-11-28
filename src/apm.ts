@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdir, readFile, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -22,6 +23,8 @@ export interface LockedPackage {
   revision: string;
   nativePluginRoot?: string;
   deployedFiles: string[];
+  deployedFileHashes?: Record<string, string>;
+  skillSubset?: string[];
 }
 /** A row `apl` cannot use, named by its `repo_url` (or its place in the lock); its recorded paths passed the path checks. */
 export interface UnreadableRow {
@@ -49,6 +52,8 @@ export interface PackageFolder {
   within: string;
   /** The folder its real path must stay inside: the scope root for a relative path; none for an absolute path in a user-scope lock. */
   bound?: string;
+  /** Per-copy content revision derived from `deployed_file_hashes`; absent to fall back to the row revision. */
+  revision?: string;
 }
 /** The copies the lock records for a package, and each folder of APM's cache of it whose place in the package no recorded folder carries. */
 export interface PackageFolders {
@@ -75,6 +80,19 @@ function optionalRecord(value: unknown, label: string): Record<string, unknown> 
 }
 function optionalString(value: unknown, label: string): string | undefined {
   return value === undefined || value === null ? undefined : requiredString(value, label);
+}
+function optionalStringMap(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string' || !entry) return undefined;
+    out[key] = entry;
+  }
+  return out;
+}
+function optionalStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.length > 0)) return undefined;
+  return value;
 }
 function deployedFiles(value: unknown, label: string, absolute: boolean): string[] {
   const deployed = value ?? [];
@@ -115,15 +133,21 @@ export function parseLock(value: unknown, absolute = false): LockRow[] {
       if (!located) throw new Error(`${label}.repo_url must be a repository path or URL`);
       const revision = [optionalString(source.resolved_commit, `${label}.resolved_commit`), optionalString(source.resolved_hash, `${label}.resolved_hash`), optionalString(source.content_hash, `${label}.content_hash`)].filter(Boolean).join(':');
       if (!revision) throw new Error(`${label} has none of resolved_commit, resolved_hash and content_hash`);
+      const deployedFileHashes = optionalStringMap(source.deployed_file_hashes);
+      const skillSubset = optionalStringList(source.skill_subset);
+      const extras = {
+        ...(deployedFileHashes === undefined ? {} : { deployedFileHashes }),
+        ...(skillSubset === undefined ? {} : { skillSubset }),
+      };
       let item: LockedPackage;
       if (local) {
         if (!located.repo.startsWith('_local/')) throw new Error(`${label}.repo_url is not a local package key`);
-        item = { repo: located.repo, path, localPath: requiredString(source.local_path, `${label}.local_path`), revision, nativePluginRoot, deployedFiles: deployed };
+        item = { repo: located.repo, path, localPath: requiredString(source.local_path, `${label}.local_path`), revision, nativePluginRoot, deployedFiles: deployed, ...extras };
       } else {
         const host = optionalString(source.host, `${label}.host`) ?? located.host;
         if (source.port !== undefined && source.port !== null && !Number.isInteger(source.port)) throw new Error(`${label}.port must be an integer`);
         const port = host === undefined || source.port === undefined || source.port === null ? '' : `:${source.port}`;
-        item = { ...(host === undefined ? {} : { host: `${host}${port}` }), repo: located.repo, path, revision, nativePluginRoot, deployedFiles: deployed };
+        item = { ...(host === undefined ? {} : { host: `${host}${port}` }), repo: located.repo, path, revision, nativePluginRoot, deployedFiles: deployed, ...extras };
       }
       const identity = JSON.stringify([item.host ?? null, item.repo, item.path, item.localPath ?? null]);
       if (seen.has(identity)) throw new Error(`${label} duplicates another lock entry`);
@@ -189,8 +213,23 @@ async function withSkills(folder: string, bound?: string): Promise<PackageFolder
 function recordedFolder(entry: string, entries: string[]): boolean {
   return entries.some((other) => other.length > entry.length && other.startsWith(entry) && (other[entry.length] === '/' || other[entry.length] === '\\'));
 }
+/** SHA-256 digest of the sorted `(relativePath, hash)` pairs APM recorded under `entry`, or undefined when none were recorded. */
+function copyContentRevision(entry: string, hashes: Record<string, string> | undefined): string | undefined {
+  if (!hashes) return undefined;
+  const pairs: [string, string][] = [];
+  for (const [file, digest] of Object.entries(hashes)) {
+    if (file.length > entry.length && file.startsWith(entry) && (file[entry.length] === '/' || file[entry.length] === '\\')) {
+      pairs.push([file.slice(entry.length + 1).replace(/\\/g, '/'), digest]);
+    }
+  }
+  if (!pairs.length) return undefined;
+  pairs.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const hash = createHash('sha256');
+  for (const [rel, digest] of pairs) hash.update(rel).update('\0').update(digest).update('\0');
+  return `sha256:${hash.digest('hex')}`;
+}
 /** The folders a row records: each folder in `deployed_files` (a skill folder, at `skills/<its name>`), and the native plugin folder with its skills. */
-export async function recordedFolders(item: Pick<LockedPackage, 'deployedFiles' | 'nativePluginRoot'>, scope: Scope): Promise<PackageFolder[]> {
+export async function recordedFolders(item: Pick<LockedPackage, 'deployedFiles' | 'nativePluginRoot' | 'deployedFileHashes'>, scope: Scope): Promise<PackageFolder[]> {
   const folders: PackageFolder[] = [];
   const seen = new Set<string>();
   for (const entry of item.deployedFiles) {
@@ -200,7 +239,13 @@ export async function recordedFolders(item: Pick<LockedPackage, 'deployedFiles' 
     const folder = absolute ? resolve(entry) : join(scope.root, native(entry));
     if (seen.has(folder)) continue;
     seen.add(folder);
-    folders.push({ folder, within: `${SKILLS}/${basename(folder)}`, ...(absolute ? {} : { bound: scope.root }) });
+    const revision = copyContentRevision(entry, item.deployedFileHashes);
+    folders.push({
+      folder,
+      within: `${SKILLS}/${basename(folder)}`,
+      ...(absolute ? {} : { bound: scope.root }),
+      ...(revision === undefined ? {} : { revision }),
+    });
   }
   if (item.nativePluginRoot) for (const found of await withSkills(join(scope.root, native(item.nativePluginRoot)), scope.root)) if (!seen.has(found.folder)) folders.push(found);
   return folders;
@@ -209,7 +254,12 @@ export async function recordedFolders(item: Pick<LockedPackage, 'deployedFiles' 
 export async function packageFolders(item: LockedPackage, scope: Scope): Promise<PackageFolders> {
   const folders = await recordedFolders(item, scope);
   const carried = new Set(folders.map((found) => found.within));
-  // the cache is never read or run, so it has no bound
-  const cache = (await withSkills(join(scope.modules, native(item.repo), ...(item.path === '.' ? [] : [native(item.path)])))).filter((found) => !carried.has(found.within));
+  const selected = item.skillSubset?.length ? new Set(item.skillSubset) : undefined;
+  // the cache is never read or run, so it has no bound; unselected skills in a skill_subset are not reported skipped
+  const cache = (await withSkills(join(scope.modules, native(item.repo), ...(item.path === '.' ? [] : [native(item.path)])))).filter((found) => {
+    if (carried.has(found.within)) return false;
+    if (selected && found.within.startsWith(`${SKILLS}/`)) return selected.has(found.within.slice(SKILLS.length + 1));
+    return true;
+  });
   return { folders, cache };
 }
