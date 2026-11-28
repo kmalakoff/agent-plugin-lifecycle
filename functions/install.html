@@ -16,7 +16,7 @@
 <div class="tsd-signature tsd-anchor-link" id="install"><span class="tsd-kind-call-signature">install</span><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">options</span><span class="tsd-signature-symbol">?:</span> <a href="../interfaces/InstallOptions.html" class="tsd-signature-type tsd-kind-interface">InstallOptions</a><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="../interfaces/CopyResult.html" class="tsd-signature-type tsd-kind-interface">CopyResult</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">&gt;</span><a href="#install" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></div>
 <div class="tsd-description">
 <div class="tsd-comment tsd-typography"><p>Runs the <code>install</code> script of every copy approved in its place and not already current, asking <code>approve</code> first, once per id and command.
-A copy from APM is current when its last successful run had the same command and revision; a named folder always runs.</p>
+A copy from APM is current when its last successful run matches its command and stamp; a named folder always runs.</p>
 </div>
 <div class="tsd-parameters">
 <h4 class="tsd-parameters-title">Parameters</h4>
@@ -24,7 +24,7 @@ A copy from APM is current when its last successful run had the same command and
 <li><span><span class="tsd-kind-parameter">options</span>: <a href="../interfaces/InstallOptions.html" class="tsd-signature-type tsd-kind-interface">InstallOptions</a><span class="tsd-signature-symbol"> = {}</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="../interfaces/CopyResult.html" class="tsd-signature-type tsd-kind-interface">CopyResult</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/kmalakoff/agent-plugin-lifecycle/blob/e5668e49aa57a7183d1e0138f385cf254941519b/src/install.ts#L13">install.ts:13</a></li></ul></aside></div></li></ul></section></div>
+<li>Defined in <a href="https://github.com/kmalakoff/agent-plugin-lifecycle/blob/709b7645bdafbb2ade0edbe3ad569c26a3bad667/src/install.ts#L13">install.ts:13</a></li></ul></aside></div></li></ul></section></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

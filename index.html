@@ -10,7 +10,7 @@
 <h1>agent-plugin-lifecycle</h1></div>
 <div class="tsd-panel tsd-typography"><h1 id="agent-plugin-lifecycle" class="tsd-anchor-link">agent-plugin-lifecycle<a href="#agent-plugin-lifecycle" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h1>
 <p>Lets an agent plugin or skill ship its own setup command, and runs it on your machine only after you approve it. The author puts an <code>apl.json</code> beside the plugin or skill:</p>
-<pre><code class="json"><span class="hl-0">{ </span><span class="hl-1">&quot;scripts&quot;</span><span class="hl-0">: { </span><span class="hl-1">&quot;install&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;npm ci --no-bin-links&quot;</span><span class="hl-0"> } }</span>
+<pre><code class="json"><span class="hl-0">{ </span><span class="hl-1">&quot;scripts&quot;</span><span class="hl-0">: { </span><span class="hl-1">&quot;install&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;npm ci&quot;</span><span class="hl-0"> } }</span>
 </code><button type="button">Copy</button></pre>
 
 <p>An installer puts one copy of a plugin or skill in the folder of each agent harness (the agent tool that loads it, such as Claude Code, Copilot or Codex). The <code>apl</code> command finds each of those copies, asks you once per project (or once for your user install) whether to run the command, and runs it in each copy. After that, Agent Package Manager (APM) can call <code>apl install</code> after every install and update, so approved scripts run on their own and a changed plugin runs again once. Nothing runs that you have not approved, and you are asked again when the command changes (<a href="#security-model">Security model</a>).</p>
@@ -72,8 +72,9 @@
 <ul>
 <li>It runs through the platform shell (<code>sh</code>, or <code>cmd.exe</code> on Windows), exactly as written, with the folder that holds <code>apl.json</code> as its working directory. Write it for both shells if your users run both, or call a script: <code>node setup.js</code>.</li>
 <li>Standard input is closed. Its output, standard output included, goes to <code>apl</code>'s standard error.</li>
-<li>Make it safe to repeat, as <code>npm ci</code> and <code>uv sync</code> are. It runs again in each copy when the plugin changes or a copy is recreated.</li>
-<li>For npm in a plugin copy use <code>npm ci --no-bin-links</code>. APM refuses later installs of a copy that contains a symlink, and <code>node_modules/.bin</code> would add one.</li>
+<li>Make it safe to repeat, as <code>npm ci</code> and <code>uv sync</code> are. It runs again in each copy when that copy's files change or the copy is recreated.</li>
+<li>For npm in a <strong>native plugin copy</strong> (<code>.agents/plugins/&lt;name&gt;/</code>), use <code>npm ci --no-bin-links</code>: APM refuses later installs of a plugin copy that contains a symlink, and <code>node_modules/.bin</code> would add one. Plain skill copies (<code>.agents/skills/&lt;name&gt;/</code>, <code>.claude/skills/&lt;name&gt;/</code>) work with standard <code>npm ci</code>.</li>
+<li>For a skill with a nested package, chain commands cleanly (for example <code>npm ci &amp;&amp; npm ci --prefix scripts</code>) or call a script (<code>node setup.js</code>).</li>
 <li>Do not put <code>apl.json</code> under <code>.apm/</code>, which APM strips from deployed copies. An <code>apl.json</code> at the root of a repository of plain skills reaches no skill copy, only APM's cache, so it is reported <code>skipped</code> and never runs; put it in each <code>skills/&lt;name&gt;/</code>.</li>
 <li>Changing the command makes every user approve it again.</li>
 </ul>
@@ -93,17 +94,19 @@
 </code><button type="button">Copy</button></pre>
 
 <ul>
-<li><strong><code>timeoutSec</code></strong>: APM kills a lifecycle command after 30 seconds unless the entry sets <code>timeoutSec</code>, and still exits 0. One <code>apl install</code> runs every script that is due, so allow time for all of them.</li>
+<li><strong><code>timeoutSec</code> and output limit</strong>: APM kills a lifecycle command after 30 seconds unless the entry sets <code>timeoutSec</code>, and also kills a command whose output exceeds 1 MiB per stream — exiting 0 either way. One <code>apl install</code> runs every script that is due, so allow time for all of them.</li>
 <li><strong>Secrets</strong>: APM removes environment variables whose names look like credentials (<code>NPM_TOKEN</code>, <code>*_API_KEY</code>, <code>*_PASSWORD</code> and similar) from lifecycle commands. If a script needs one, list it on the entry: <code>allowedEnvVars: [NPM_TOKEN]</code>.</li>
 <li>APM writes the command's output to <code>~/.apm/logs/scripts.log</code>, not to your terminal.</li>
+<li>At project scope, APM re-creates native plugin folders on <code>apm install</code> (so their scripts run again each time) and on <code>apm uninstall</code> without firing <code>post-install</code> (leaving remaining native plugins <code>stale</code> until <code>apl install</code>).</li>
 </ul>
+<p>In a script or scheduled job, you can leave out APM's lifecycle entry and run <code>apl install</code> (or <code>apl install -g</code>) yourself after <code>apm</code>: <code>apl</code>'s lines and exit code then reach the job directly, and APM's time limit and 1 MiB output limit do not apply.</p>
 <p>Check the registration: <code>apm lifecycle</code> lists the entry (<code>post-install | command | apl install | user</code>).</p>
 <p>The first time in each project, APM's run has no terminal, so <code>apl</code> approves nothing and APM prints:</p>
 <pre><code><span class="hl-0">[!] </span><span class="hl-9">Lifecycle</span><span class="hl-0"> </span><span class="hl-9">post</span><span class="hl-0">-</span><span class="hl-9">install</span><span class="hl-0"> </span><span class="hl-9">command</span><span class="hl-0"> </span><span class="hl-9">script</span><span class="hl-0"> </span><span class="hl-9">exited</span><span class="hl-0"> </span><span class="hl-10">with</span><span class="hl-0"> </span><span class="hl-9">code</span><span class="hl-0"> </span><span class="hl-8">1</span><span class="hl-0">; </span><span class="hl-9">continuing</span><span class="hl-0">. </span><span class="hl-9">Output</span><span class="hl-0">: /</span><span class="hl-9">Users</span><span class="hl-0">/</span><span class="hl-9">me</span><span class="hl-0">/.</span><span class="hl-9">apm</span><span class="hl-0">/</span><span class="hl-9">logs</span><span class="hl-0">/</span><span class="hl-9">scripts</span><span class="hl-0">.</span><span class="hl-9">log</span>
 </code><button>Copy</button></pre>
 
 <p>That is <code>apl</code> reporting a script waiting for your approval. Run <code>apl install</code> yourself, in the project (or with <code>-g</code> for a user install). It asks once per plugin or skill:</p>
-<pre><code class="console"><span class="hl-0">$ apl install</span><br/><span class="hl-0">github.com/team/skills:skills/report wants to run</span><br/><span class="hl-0">  install: npm ci --no-bin-links</span><br/><span class="hl-0">in</span><br/><span class="hl-0">  /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">  /Users/me/project/.claude/skills/report</span><br/><span class="hl-0">Run it? [y/N] y</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran github.com/team/skills:skills/report /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran github.com/team/skills:skills/report /Users/me/project/.claude/skills/report</span>
+<pre><code class="console"><span class="hl-0">$ apl install</span><br/><span class="hl-0">github.com/team/skills:skills/report wants to run</span><br/><span class="hl-0">  install: npm ci</span><br/><span class="hl-0">in</span><br/><span class="hl-0">  /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">  /Users/me/project/.claude/skills/report</span><br/><span class="hl-0">Run it? [y/N] y</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran github.com/team/skills:skills/report /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran github.com/team/skills:skills/report /Users/me/project/.claude/skills/report</span>
 </code><button type="button">Copy</button></pre>
 
 <p>From then on APM's entry runs it: approved scripts run in every new or changed copy, and APM's own run never asks, so a script you have not approved is only reported (the same line from APM again). Check the result after APM:</p>
@@ -113,7 +116,7 @@
 <p><code>apl install -y</code> approves every unapproved script without asking and saves those approvals, for CI or a machine you set up from a script. All questions come before any script runs, and the approvals are saved after the last one: Ctrl+C at any question stops <code>apl</code> (exit 130) with nothing saved and nothing run.</p>
 <h3 id="with-the-skills-cli-" class="tsd-anchor-link">With the skills CLI (<code>npx skills</code>)<a href="#with-the-skills-cli-" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <p>The skills CLI has no install hook, so you run <code>apl</code> on the folders it creates. It writes the skill once under <code>.agents/skills/&lt;name&gt;</code> and links each other agent's folder to it (<code>.claude/skills/&lt;name&gt;</code> for Claude Code):</p>
-<pre><code class="console"><span class="hl-0">$ npx skills add team/skills --skill report -a claude-code -a codex</span><br/><span class="hl-0">$ apl install .agents/skills/report .claude/skills/report</span><br/><span class="hl-0">/Users/me/project/.agents/skills/report wants to run</span><br/><span class="hl-0">  install: npm ci --no-bin-links</span><br/><span class="hl-0">in</span><br/><span class="hl-0">  /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">Run it? [y/N] y</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran /Users/me/project/.agents/skills/report /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">$ apl status .agents/skills/report .claude/skills/report</span><br/><span class="hl-0">ok /Users/me/project/.agents/skills/report /Users/me/project/.agents/skills/report</span>
+<pre><code class="console"><span class="hl-0">$ npx skills add team/skills --skill report -a claude-code -a codex</span><br/><span class="hl-0">$ apl install .agents/skills/report .claude/skills/report</span><br/><span class="hl-0">/Users/me/project/.agents/skills/report wants to run</span><br/><span class="hl-0">  install: npm ci</span><br/><span class="hl-0">in</span><br/><span class="hl-0">  /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">Run it? [y/N] y</span><br/><span class="hl-0">added 12 packages in 1s</span><br/><span class="hl-0">ran /Users/me/project/.agents/skills/report /Users/me/project/.agents/skills/report</span><br/><span class="hl-0">$ apl status .agents/skills/report .claude/skills/report</span><br/><span class="hl-0">ok /Users/me/project/.agents/skills/report /Users/me/project/.agents/skills/report</span>
 </code><button type="button">Copy</button></pre>
 
 <p>The link resolves to the same folder, so it is one copy: one question, one line. With Claude Code alone (<code>-a claude-code</code>), the skills CLI copies the skill straight into <code>.claude/skills/&lt;name&gt;</code>; name that folder. With <code>-g</code>, the skills CLI writes under your home instead (<code>~/.agents/skills/report</code>, <code>~/.claude/skills/report</code>); name those folders. After <code>npx skills update</code>, run the same <code>apl install</code> again: a named folder's script runs every time you name it, because there is no installed revision to compare.</p>
@@ -127,7 +130,7 @@
 <li><strong>You approve the exact command.</strong> The question shows the command text, and a changed command is asked again.</li>
 <li><strong>An approval belongs to one place:</strong> one project, your user install, or one named folder. As in npm, where <code>allowScripts</code> belongs to the project being installed, approving a skill in one project approves it nowhere else.</li>
 <li><strong>Approvals are stored per user in <code>~/.apl</code>, never in the project.</strong> This is APM's rule for its own lifecycle trust: a file in the project could be committed by its author, so a cloned project could approve its own scripts. Also, <code>apl.json</code> ships inside each plugin or skill, so a project has no <code>apl</code> file of its own, where npm has <code>package.json</code>.</li>
-<li><strong><code>~/.apl</code> must be yours.</strong> On macOS and Linux, <code>apl</code> stops (exit 2) when <code>~/.apl</code> or a file in it is not owned by you or is writable by group or others, as OpenSSH does for <code>~/.ssh</code>. Fix it with <code>chmod go-w</code>.</li>
+<li><strong><code>~/.apl</code> must be yours.</strong> On macOS and Linux, <code>apl</code> stops (exit 2) when <code>~/.apl</code> or a file in it is not owned by you or is writable by group or others, as OpenSSH does for <code>~/.ssh</code>. Fix it with <code>chmod go-w</code>. Windows is not checked, because Node cannot read a file's owner or access list there (pip and GnuPG skip it for the same reason); <code>apl</code> relies on the protection Windows gives your profile folder.</li>
 <li><strong>Nothing is approved silently.</strong> When APM runs <code>apl</code> there is no terminal, so <code>apl</code> asks nothing and runs only what is already approved. <code>-y</code> is the one explicit way to approve without a question.</li>
 <li><strong><code>-y</code> approves everything unapproved at that moment, and saves it.</strong> When an agent runs <code>apl install -y</code>, the agent approves for you: keep that command on ask in your agent's permissions, or run <code>apl install</code> yourself in a terminal.</li>
 <li><strong>Approval covers the command, not the version or the files it runs.</strong> npm pins an approval to the version by default; <code>apl</code> does not pin the revision, because APM's run cannot ask: an update with the same command runs without a question. A new version can also change what <code>npm ci</code> installs without changing the command.</li>
@@ -233,11 +236,13 @@
 </table>
 <p>So the same plugin is approved separately in each project and for your user install, and a project you clone cannot run a script by naming a source you approved somewhere else. A project you move or clone again is a new place and is asked again.</p>
 <p>A script runs only when <code>~/.apl/approvals.json</code> holds, under the copy's place, the exact command text for its id:</p>
-<pre><code class="json"><span class="hl-0">{</span><br/><span class="hl-0">  </span><span class="hl-1">&quot;version&quot;</span><span class="hl-0">: </span><span class="hl-8">1</span><span class="hl-0">,</span><br/><span class="hl-0">  </span><span class="hl-1">&quot;approvals&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">    </span><span class="hl-1">&quot;/Users/me/project&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">      </span><span class="hl-1">&quot;github.com/team/skills:skills/report&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">        </span><span class="hl-1">&quot;scripts&quot;</span><span class="hl-0">: { </span><span class="hl-1">&quot;install&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;npm ci --no-bin-links&quot;</span><span class="hl-0"> },</span><br/><span class="hl-0">        </span><span class="hl-1">&quot;approved&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;2026-11-26T20:15:00.000Z&quot;</span><br/><span class="hl-0">      }</span><br/><span class="hl-0">    }</span><br/><span class="hl-0">  }</span><br/><span class="hl-0">}</span>
+<pre><code class="json"><span class="hl-0">{</span><br/><span class="hl-0">  </span><span class="hl-1">&quot;version&quot;</span><span class="hl-0">: </span><span class="hl-8">1</span><span class="hl-0">,</span><br/><span class="hl-0">  </span><span class="hl-1">&quot;approvals&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">    </span><span class="hl-1">&quot;/Users/me/project&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">      </span><span class="hl-1">&quot;github.com/team/skills:skills/report&quot;</span><span class="hl-0">: {</span><br/><span class="hl-0">        </span><span class="hl-1">&quot;scripts&quot;</span><span class="hl-0">: { </span><span class="hl-1">&quot;install&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;npm ci&quot;</span><span class="hl-0"> },</span><br/><span class="hl-0">        </span><span class="hl-1">&quot;approved&quot;</span><span class="hl-0">: </span><span class="hl-2">&quot;2026-11-26T20:15:00.000Z&quot;</span><br/><span class="hl-0">      }</span><br/><span class="hl-0">    }</span><br/><span class="hl-0">  }</span><br/><span class="hl-0">}</span>
 </code><button type="button">Copy</button></pre>
 
 <p>Answering anything but <code>y</code> saves nothing, and you are asked again next time. A script you never want stays <code>unapproved</code>: uninstall the plugin, or accept that <code>apl status</code> exits 1. To revoke an approval, delete its entry. Approvals belong to you and are never read from a project.</p>
-<p><code>~/.apl/state.json</code> records the last successful run in each copy (command, and the revision APM locked), so a copy that is already current is skipped. The record is removed while a script runs, so a failed or killed run leaves the copy <code>missing</code>. Both files are private to you (<code>0700</code> folder, <code>0600</code> files on macOS and Linux).</p>
+<p><code>~/.apl/state.json</code> records the last successful run in each copy (command and a stamp of the copy's files and folder identity), so a copy that is already current is skipped and changing one skill in a repository does not re-run its siblings. The record is removed while a script runs, so a failed or killed run leaves the copy <code>missing</code>. If a copy's packages break (a Node upgrade, files removed by hand), run the command in that folder yourself, or delete <code>~/.apl/state.json</code> and run <code>apl install</code>: every approved script then runs once more. Both files are private to you (<code>0700</code> folder, <code>0600</code> files on macOS and Linux).</p>
+<h3 id="running-as-another-user" class="tsd-anchor-link">Running as another user<a href="#running-as-another-user" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
+<p>Run <code>apl</code> as the account whose <code>~/.apl</code> it uses. Running as root with another account's <code>HOME</code> leaves a root-owned <code>~/.apl</code> there, which that user's <code>apl</code> will refuse.</p>
 <h2 id="commands" class="tsd-anchor-link">Commands<a href="#commands" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <pre><code><span class="hl-9">apl</span><span class="hl-0"> </span><span class="hl-9">install</span><span class="hl-0"> [-</span><span class="hl-9">g</span><span class="hl-0">] [-</span><span class="hl-9">y</span><span class="hl-0">] [</span><span class="hl-9">folder</span><span class="hl-0">...]   </span><span class="hl-9">Run</span><span class="hl-0"> </span><span class="hl-9">install</span><span class="hl-0"> </span><span class="hl-9">scripts</span><span class="hl-0">, </span><span class="hl-9">asking</span><span class="hl-0"> </span><span class="hl-9">before</span><span class="hl-0"> </span><span class="hl-9">any</span><span class="hl-0"> </span><span class="hl-9">that</span><span class="hl-0"> </span><span class="hl-9">are</span><span class="hl-0"> </span><span class="hl-9">not</span><span class="hl-0"> </span><span class="hl-9">approved</span><br/><span class="hl-9">apl</span><span class="hl-0"> </span><span class="hl-9">status</span><span class="hl-0"> [-</span><span class="hl-9">g</span><span class="hl-0">] [</span><span class="hl-9">folder</span><span class="hl-0">...]         </span><span class="hl-9">Report</span><span class="hl-0"> </span><span class="hl-9">each</span><span class="hl-0"> </span><span class="hl-9">copy</span><span class="hl-0">; </span><span class="hl-9">exit</span><span class="hl-0"> </span><span class="hl-8">1</span><span class="hl-0"> </span><span class="hl-9">unless</span><span class="hl-0"> </span><span class="hl-9">every</span><span class="hl-0"> </span><span class="hl-9">copy</span><span class="hl-0"> </span><span class="hl-9">is</span><span class="hl-0"> </span><span class="hl-9">ok</span><br/><span class="hl-9">apl</span><span class="hl-0"> --</span><span class="hl-9">help</span><span class="hl-0"> | -</span><span class="hl-9">h</span><br/><span class="hl-9">apl</span><span class="hl-0"> --</span><span class="hl-9">version</span><span class="hl-0"> | -</span><span class="hl-9">v</span>
 </code><button>Copy</button></pre>
@@ -260,7 +265,7 @@
 </tr>
 </tbody>
 </table>
-<p><code>apl install</code> asks only when standard input and output are a terminal. It prints one line per copy, each as soon as its result is known (so it follows its script's output, and a run APM kills still shows what finished), or <code>nothing installed</code>. Standard output holds only these lines; scripts print to standard error.</p>
+<p><code>apl install</code> asks only when standard input and output are a terminal. Run one <code>apl install</code> at a time; <code>apl</code> does not guard against two running in the same copies. It prints one line per copy, each as soon as its result is known (so it follows its script's output, and a run APM kills still shows what finished), or <code>nothing installed</code>. Standard output holds only these lines; scripts print to standard error.</p>
 <table>
 <thead>
 <tr>
@@ -275,7 +280,7 @@
 </tr>
 <tr>
 <td><code>current &lt;id&gt; &lt;folder&gt;</code></td>
-<td>Already succeeded for this command and revision; skipped.</td>
+<td>Already succeeded for this command and copy; skipped.</td>
 </tr>
 <tr>
 <td><code>unapproved &lt;id&gt; &lt;folder&gt;</code></td>
@@ -302,7 +307,7 @@
 <tbody>
 <tr>
 <td><code>ok &lt;id&gt; &lt;folder&gt;</code></td>
-<td>The current command succeeded here for the installed revision.</td>
+<td>The current command succeeded here for the installed copy.</td>
 </tr>
 <tr>
 <td><code>missing &lt;id&gt; &lt;folder&gt;</code></td>
@@ -310,7 +315,7 @@
 </tr>
 <tr>
 <td><code>stale &lt;id&gt; &lt;folder&gt;</code></td>
-<td>It last succeeded for an older revision or an older command.</td>
+<td>It last succeeded for older files, an older command, or a recreated folder.</td>
 </tr>
 <tr>
 <td><code>unapproved &lt;id&gt; &lt;folder&gt;</code></td>
@@ -396,6 +401,9 @@
 <li><a href="#security-model"><span>Security model</span></a></li>
 <li><a href="#which-copies-uses"><span>Which copies  uses</span></a></li>
 <li><a href="#approvals"><span>Approvals</span></a></li>
+<li>
+<ul>
+<li><a href="#running-as-another-user"><span>Running as another user</span></a></li></ul></li>
 <li><a href="#commands"><span>Commands</span></a></li>
 <li><a href="#library"><span>Library</span></a></li>
 <li><a href="#agent-skill"><span>Agent skill</span></a></li>
